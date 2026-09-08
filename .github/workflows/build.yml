@@ -1,0 +1,106 @@
+name: Build AI-VOX3 OpenVela firmware
+
+on:
+  push:
+    branches: [dev-ai-contest-2026]
+  pull_request:
+    branches: [dev-ai-contest-2026]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - name: Checkout team repo (our changes)
+        uses: actions/checkout@v4
+        with:
+          path: team_repo
+          fetch-depth: 1
+
+      - name: Install repo tool, git-lfs, esptool
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git git-lfs python3 python3-pip curl rsync
+          git lfs install
+          sudo curl -sSL https://mirrors.tuna.tsinghua.edu.cn/git/git-repo/repo -o /usr/local/bin/repo
+          sudo chmod a+x /usr/local/bin/repo
+          pip install --quiet esptool
+          git config --global user.email "ci@openvela-contest.local"
+          git config --global user.name "OpenVela Contest CI"
+          git config --global http.postBuffer 524288000
+
+      - name: repo init
+        run: |
+          mkdir -p openvela
+          cd openvela
+          repo init -u "https://github.com/${{ github.repository }}" \
+            -b dev-ai-contest-2026 \
+            -m contest2026_393_jizhipai.xml \
+            --repo-url=https://mirrors.tuna.tsinghua.edu.cn/git/git-repo/ \
+            --depth=1
+
+      - name: repo sync
+        working-directory: openvela
+        run: repo sync -c -j8 --no-clone-bundle || repo sync -c -j4 --no-clone-bundle
+
+      - name: Pull Git LFS objects (best effort)
+        working-directory: openvela
+        run: repo forall -c 'git lfs pull 2>/dev/null || true'
+
+      - name: Overlay our team repo onto the manifest project
+        run: |
+          # The manifest pulls the official team project; replace it with our
+          # checked-out sources so CI always builds OUR board/app/manifest.
+          rm -rf openvela/contest2026_393_jizhipai
+          mkdir -p openvela/contest2026_393_jizhipai
+          ( cd team_repo && git archive HEAD ) | tar -x -C openvela/contest2026_393_jizhipai
+
+      - name: Build (M1: minimal NSH for AI-VOX3 / ESP32-S3-R8)
+        working-directory: openvela
+        run: |
+          ./build.sh vendor/openvela/boards/contest2026_393_board/configs/nsh --cmake -j"$(nproc)"
+
+      - name: Locate build outputs
+        id: outputs
+        working-directory: openvela
+        run: |
+          NUTTX_BIN=$(find . -name nuttx.bin | head -n1)
+          BOOT=$(find . -name bootloader.bin | head -n1)
+          PART=$(find . -name partitions.bin | head -n1)
+          echo "nuttx_bin=${NUTTX_BIN}" >> "$GITHUB_OUTPUT"
+          echo "boot=${BOOT}" >> "$GITHUB_OUTPUT"
+          echo "part=${PART}" >> "$GITHUB_OUTPUT"
+          echo "nuttx_bin=${NUTTX_BIN}"
+          echo "boot=${BOOT}"
+          echo "part=${PART}"
+
+      - name: Merge nuttx.merged.bin (best effort)
+        working-directory: openvela
+        run: |
+          if [ -n "${{ steps.outputs.boot }}" ] && [ -n "${{ steps.outputs.part }}" ] && [ -n "${{ steps.outputs.nuttx_bin }}" ]; then
+            esptool.py --chip esp32s3 merge_bin \
+              -o nuttx.merged.bin \
+              --flash_mode dio --flash_size 16MB --flash_freq 80m \
+              0x0000 "${{ steps.outputs.boot }}" \
+              0x8000 "${{ steps.outputs.part }}" \
+              0x10000 "${{ steps.outputs.nuttx_bin }}"
+            echo "Merged flash image produced."
+          elif [ -n "${{ steps.outputs.nuttx_bin }}" ]; then
+            cp "${{ steps.outputs.nuttx_bin }}" nuttx.merged.bin
+            echo "Bootloader/partition not found; publishing raw nuttx.bin as nuttx.merged.bin"
+          else
+            echo "ERROR: nuttx.bin was not produced by the build." >&2
+            find . -name '*.bin' | head
+            exit 1
+          fi
+
+      - name: Upload firmware artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aivox3-openvela-firmware
+          path: |
+            openvela/nuttx.merged.bin
+            openvela/nuttx.bin
+          if-no-files-found: warn

@@ -1,0 +1,11 @@
+#
+# Contest 2026 team 393 - AI-VOX3 board (ESP32-S3-R8)
+#
+
+if ARCH_BOARD_CONTEST2026_393_BOARD
+
+config ARCH_BOARD_CONTEST2026_393_BOARD_TAG
+	string "Board tag"
+	default "contest2026_393_board"
+
+endif
