@@ -8,4 +8,57 @@ config ARCH_BOARD_CONTEST2026_393_BOARD_TAG
 	string "Board tag"
 	default "contest2026_393_board"
 
+# --- Onboard peripherals (each can be enabled independently) ---
+
+config AIVOX3_LCD
+	bool "Enable AI-VOX3 ST7789 LCD (SPI)"
+	default y
+	select ESP32S3_SPI2
+	select SPI
+	select SPI_CMDDATA
+	select SPI_EXCHANGE
+	select LCD
+	select LCD_DEV
+	select LCD_ST7789
+	select LCD_FRAMEBUFFER
+	---help---
+		AI-VOX3 1.54" ST7789 LCD on the ESP32-S3 FSPI (SPI2) bus.
+
+config AIVOX3_BUTTONS
+	bool "Enable AI-VOX3 onboard buttons"
+	default y
+	select INPUT_BUTTONS
+	---help---
+		Three user buttons (GPIO46/45/0, active low).
+
+config AIVOX3_SERVO
+	bool "Enable AI-VOX3 pan/tilt servo (LEDC PWM)"
+	default y
+	select ESP32S3_LEDC
+	---help---
+		Two servos on GPIO42 (PAN) and GPIO43 (TILT) driven by LEDC.
+
+config AIVOX3_ES8311
+	bool "Enable AI-VOX3 ES8311 audio codec (I2C)"
+	default y
+	select ESP32S3_I2C0
+	select I2C
+	select I2C_DRIVER
+	---help---
+		ES8311 codec on I2C (SCL=12, SDA=13, ADDR=0x18). I2C bus is
+		auto-registered by the arch driver; this just documents the pin map.
+
+config AIVOX3_WS2812
+	bool "Enable AI-VOX3 WS2812 RGB (M2 - stub)"
+	default n
+	---help---
+		WS2811/WS2812 single-wire RGB on GPIO41. Needs a bit-bang / RMT
+		lower half (not in base tree); deferred to M2.
+
+config AIVOX3_SDMMC
+	bool "Enable AI-VOX3 microSD (M2 - stub)"
+	default n
+	---help---
+		microSD on SDMMC (CMD=38, CLK=39, DAT0=40). Deferred to M2.
+
 endif

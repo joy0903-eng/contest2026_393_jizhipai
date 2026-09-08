@@ -5,16 +5,18 @@
  * console (VID:PID 303A:1001).
  *
  * openvela_board_initialize() is the board bring-up hook called by the
- * openvela board init chain.
+ * openvela board init chain. We delegate all device registration to
+ * aivox3_bringup().
  ****************************************************************************/
 
 #include <nuttx/board.h>
 
+#include "aivox3.h"
+
 void openvela_board_initialize(void)
 {
-  /* M1 (L0): minimal NSH bring-up. The esp32s3 arch code initializes the
-   * CPU clock, OPI PSRAM and the native USB-CDC serial console from the
-   * defconfig. Board-level peripheral drivers (servo LEDC, ES8311 audio,
-   * ST7789 LCD, WS2812, SD, buttons) are registered in M2 from
-   * board_bringup(). */
+  /* Register onboard peripherals (LCD, buttons, servos, ...). Each
+   * sub-init is self-contained and logs (never panics) on failure so the
+   * NSH console always comes up even if a peripheral is misconfigured. */
+  aivox3_bringup();
 }

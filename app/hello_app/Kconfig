@@ -1,0 +1,13 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config LVX_USE_DEMO_CONTEST2026_393_DESKTOP_COMPANION
+	bool "AI-VOX3 desktop companion demo"
+	default n
+	---help---
+		Enable the AI-VOX3 (ESP32-S3-R8) desktop companion demo. Exercises
+		the onboard pan/tilt servos (/dev/pwm0,/dev/pwm1), the ST7789 LCD
+		(/dev/lcd0) and the user buttons (board_buttons()). Run as the
+		'desktop_companion' built-in command from the NSH console.

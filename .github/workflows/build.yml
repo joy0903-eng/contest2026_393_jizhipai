@@ -56,10 +56,10 @@ jobs:
           mkdir -p openvela/contest2026_393_jizhipai
           ( cd team_repo && git archive HEAD ) | tar -x -C openvela/contest2026_393_jizhipai
 
-      - name: Build (M1: minimal NSH for AI-VOX3 / ESP32-S3-R8)
+      - name: Build (AI-VOX3 desktop companion / ESP32-S3-R8)
         working-directory: openvela
         run: |
-          ./build.sh vendor/openvela/boards/contest2026_393_board/configs/nsh --cmake -j"$(nproc)"
+          ./build.sh vendor/openvela/boards/contest2026_393_board/configs/openvela --cmake -j"$(nproc)"
 
       - name: Locate build outputs
         id: outputs
