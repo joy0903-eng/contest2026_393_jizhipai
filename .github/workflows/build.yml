@@ -23,15 +23,19 @@ jobs:
       - name: Install repo tool, git-lfs, esptool
         run: |
           sudo apt-get update
+          sudo apt-get install -y git git-lfs python3 python3-pip curl rsync python-is-python3 || \
           sudo apt-get install -y git git-lfs python3 python3-pip curl rsync
+          sudo ln -sf /usr/bin/python3 /usr/local/bin/python
           git lfs install
           # ★ 修复（run#7 根因）：-f 失败即报错 + 官方源（Azure runner 可达），
           #   原来无 -f 时清华镜像超时会写入 0 字节空脚本 → repo 全程静默假成功
           sudo curl -fSL https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo
           sudo chmod a+x /usr/local/bin/repo
           test -s /usr/local/bin/repo || { echo "repo 脚本下载失败（空文件）"; exit 1; }
+          echo "=== repo 工具解剖 ==="
+          ls -la /usr/local/bin/repo
           head -n2 /usr/local/bin/repo
-          repo --version
+          repo --version || echo "!! repo --version 失败($?)"
           pip install --quiet esptool
           git config --global user.email "ci@openvela-contest.local"
           git config --global user.name "OpenVela Contest CI"
@@ -42,17 +46,20 @@ jobs:
           mkdir -p openvela
           cd openvela
           set -o pipefail
+          { which repo; ls -la /usr/local/bin/repo; repo --version; } > init.log 2>&1 || echo "!! repo 基础检查失败" >> init.log
+          cat init.log
           repo init -u "https://github.com/${{ github.repository }}" \
             -b dev-ai-contest-2026 \
             -m contest2026_393_jizhipai.xml \
-            --depth=1 2>&1 | tee init.log
-          (repo sync -c -j4 --no-clone-bundle) 2>&1 | tee sync.log
-          echo "=== 同步自检 ===" | tee -a sync.log
-          ls -la build.sh 2>&1 | tee -a sync.log || true
-          [ -f build.sh ] || { cp build/tools/build.sh build.sh 2>/dev/null && echo "已从 build/tools 兜底复制 build.sh" | tee -a sync.log; }
-          ls build/ 2>/dev/null | head -n5 | tee -a sync.log || true
-          repo list 2>/dev/null | wc -l | tee -a sync.log
-          test -f build.sh || { echo "FATAL: build.sh 仍不存在" | tee -a sync.log; exit 1; }
+            --depth=1 >> init.log 2>&1 || { echo "== INIT FAILED ==" >> init.log; tail -30 init.log > init_err.log; exit 1; }
+          echo "INIT OK" >> init.log
+          (repo sync -c -j4 --no-clone-bundle) >> sync.log 2>&1 || { echo "== SYNC FAILED ==" >> sync.log; tail -30 sync.log > sync_err.log; exit 1; }
+          echo "SYNC OK" >> sync.log
+          echo "=== 同步自检 ===" >> sync.log
+          ls -la build.sh >> sync.log 2>&1 || true
+          [ -f build.sh ] || { cp build/tools/build.sh build.sh 2>/dev/null && echo "已兜底复制 build.sh" >> sync.log; }
+          repo list 2>/dev/null | wc -l >> sync.log
+          test -f build.sh || { echo "FATAL: build.sh missing" >> sync.log; exit 1; }
 
       - name: Pull Git LFS objects (best effort)
         working-directory: openvela
@@ -87,6 +94,8 @@ jobs:
           cp "${{ github.workspace }}/dirlist.txt" .
           cp "${{ github.workspace }}/sync_tail.log" . 2>/dev/null || true
           cp "${{ github.workspace }}/init_tail.log" . 2>/dev/null || true
+          cp "${{ github.workspace }}/openvela/init_err.log" . 2>/dev/null || true
+          cp "${{ github.workspace }}/openvela/sync_err.log" . 2>/dev/null || true
           git add -A
           git commit -q -m "build log run #${{ github.run_number }}"
           git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
