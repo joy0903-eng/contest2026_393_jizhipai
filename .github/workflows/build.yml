@@ -64,34 +64,22 @@ jobs:
           set -o pipefail
           ./build.sh vendor/openvela/boards/contest2026_393_board/configs/openvela --cmake -j"$(nproc)" 2>&1 | tee build.log
 
-      - name: Upload build log on failure
+      - name: Publish build log to logs branch (SSH-pullable)
         if: failure()
-        working-directory: openvela
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          REPO_API="https://api.github.com/repos/${{ github.repository }}"
-          ls -la > dirlist.txt 2>&1 || true
-          tail -c 2000000 build.log > build_tail.log 2>/dev/null || echo "no build.log" > build_tail.log
-          RESP=$(curl -sS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "$REPO_API/releases" \
-            -d "{\"tag_name\":\"log-${{ github.run_number }}\",\"name\":\"build-log-${{ github.run_number }}\",\"body\":\"failure diagnostics\"}")
-          UP=$(echo "$RESP" | grep -o '"upload_url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's/{.*}//')
-          if [ -n "$UP" ]; then
-            curl -sS -X POST \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Content-Type: text/plain" \
-              --data-binary "@build_tail.log" \
-              "$UP?name=build_tail.log" | head -c 200
-            curl -sS -X POST \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Content-Type: text/plain" \
-              --data-binary "@dirlist.txt" \
-              "$UP?name=dirlist.txt" | head -c 200
-            echo "日志已上传到 Release log-${{ github.run_number }}"
-          fi
+          tail -c 2000000 openvela/build.log > build_tail.log 2>/dev/null || echo "no build.log" > build_tail.log
+          ls -la openvela > dirlist.txt 2>&1 || true
+          git config --global user.email "ci@openvela-contest.local"
+          git config --global user.name "OpenVela CI"
+          mkdir -p /tmp/pub && cd /tmp/pub
+          git init -q -b logs .
+          cp "${{ github.workspace }}/build_tail.log" .
+          cp "${{ github.workspace }}/dirlist.txt" .
+          git add -A
+          git commit -q -m "build log run #${{ github.run_number }}"
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          git push -q origin logs --force
+          echo "日志已推送到 logs 分支"
 
       - name: Locate build outputs
         id: outputs
@@ -137,22 +125,17 @@ jobs:
             openvela/nuttx.bin
           if-no-files-found: warn
 
-      - name: Release firmware (downloadable without login)
+      - name: Publish firmware to firmware branch (SSH-pullable)
         if: success()
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          REPO_API="https://api.github.com/repos/${{ github.repository }}"
-          CREATE_RESP=$(curl -sS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "$REPO_API/releases" \
-            -d "{\"tag_name\":\"fw-${{ github.run_number }}\",\"name\":\"firmware-${{ github.run_number }}\",\"body\":\"OpenVela firmware build\"}")
-          UPLOAD_URL=$(echo "$CREATE_RESP" | grep -o '"upload_url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's/{.*}//')
-          if [ -z "$UPLOAD_URL" ]; then echo "创建 Release 失败"; echo "$CREATE_RESP" | head -c 500; exit 1; fi
-          curl -sS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Content-Type: application/octet-stream" \
-            --data-binary "@openvela/nuttx.merged.bin" \
-            "$UPLOAD_URL?name=nuttx.merged.bin" | head -c 300
-          echo "Release 固件已上传"
+          git config --global user.email "ci@openvela-contest.local"
+          git config --global user.name "OpenVela CI"
+          mkdir -p /tmp/fw && cd /tmp/fw
+          git init -q -b firmware .
+          cp "${{ github.workspace }}/openvela/nuttx.merged.bin" .
+          ls -la nuttx.merged.bin
+          git add -A
+          git commit -q -m "firmware build run #${{ github.run_number }}"
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          git push -q origin firmware --force
+          echo "固件已推送到 firmware 分支"
