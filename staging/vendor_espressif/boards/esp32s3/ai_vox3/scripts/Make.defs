@@ -1,0 +1,66 @@
+##############################################################################
+# scripts/Make.defs
+#
+# Board-level build definitions for emakefun AI-VOX3 (ESP32-S3-R8).
+# Cross-compiler / toolchain selection for the OpenVela (NuttX) build.
+# These mirror the conventions used by other Espressif ESP32-S3 boards.
+##############################################################################
+
+# Architecture / toolchain family
+ARCH            = xtensa
+ARCHCPU         = esp32s3
+ARCH_VENDOR     = espressif
+
+# Xtensa ESP32-S3 GCC toolchain (crosstool-NG esp-12.2.0_20230208).
+# Expected on PATH as `xtensa-esp32s3-elf-*`.
+CROSSDEV        ?= xtensa-esp32s3-elf-
+
+CC              = $(CROSSDEV)gcc
+CXX             = $(CROSSDEV)g++
+CPP             = $(CROSSDEV)gcc -E
+AS              = $(CROSSDEV)gcc
+LD              = $(CROSSDEV)ld
+AR              = $(CROSSDEV)ar rcs
+NM              = $(CROSSDEV)nm
+OBJCOPY         = $(CROSSDEV)objcopy
+OBJDUMP         = $(CROSSDEV)objdump
+STRIP           = $(CROSSDEV)strip
+
+# Optimization / debug
+ifeq ($(CONFIG_DEBUG_SYMBOLS),y)
+  OPTIMIZATION   = -Og
+else
+  OPTIMIZATION   = -Os
+endif
+
+# Common Xtensa ESP32-S3 flags
+ARCHCFLAGS      = -fno-builtin
+ARCHINCLUDES    =
+ARCHDEFINES     =
+ARCHSCRIPT      =
+
+# C flags
+CFLAGS          += $(ARCHCFLAGS) $(ARCHDEFINES) $(ARCHINCLUDES) $(OPTIMIZATION)
+CFLAGS          += -ffunction-sections -fdata-sections -Wall -Wstrict-prototypes
+CFLAGS          += -pipe
+
+# C++ flags
+CXXFLAGS        += $(CFLAGS) -fno-exceptions -fno-rtti
+
+# Assembly flags
+AFLAGS          += $(ARCHDEFINES) -pipe
+
+# Linker flags
+LDFLAGS         += -nostdlib
+ifeq ($(CONFIG_DEBUG_SYMBOLS),y)
+  LDFLAGS       += -g
+endif
+
+# Architecture-specific library paths are resolved by the top-level NuttX
+# Makefile; the board Make.defs only sets the toolchain here.
+
+# Flash / loader helpers (used by `make flash` in the nuttx/ dir)
+ESPTOOL         ?= esptool.py
+ESPTOOL_PORT    ?= /dev/ttyACM0
+ESPTOOL_BAUD    ?= 921600
+ESPTOOL_RESET   ?= default_reset

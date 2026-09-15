@@ -1,0 +1,123 @@
+#
+# src/Kconfig — Board configuration menu for emakefun AI-VOX3 (ESP32-S3-R8)
+#
+# Pin defaults mirror board.h / the porting plan appendix B. These can be
+# overridden in menuconfig. Ambiguous pins are marked with a comment.
+#
+
+if ARCH_BOARD_AI_VOX3
+
+menu "AI-VOX3 Board Settings"
+
+comment "All default pin values are sourced from the AI-VOX3 knowledge base (§3)."
+
+config AI_VOX3_LCD_MOSI
+	int "LCD MOSI (FSPI data) GPIO"
+	default 21
+
+config AI_VOX3_LCD_SCL
+	int "LCD SCL (FSPI clock) GPIO"
+	default 17
+
+config AI_VOX3_LCD_DC
+	int "LCD DC GPIO"
+	default 14
+
+config AI_VOX3_LCD_CS
+	int "LCD CS GPIO"
+	default 15
+
+config AI_VOX3_LCD_BL
+	int "LCD backlight GPIO"
+	default 16
+
+config AI_VOX3_LCD_RST
+	int "LCD reset GPIO (-1 if not connected)"
+	default -1
+	# TODO(real-device): AI-VOX3 has no LCD reset pin.
+
+config AI_VOX3_ES8311_I2C_SCL
+	int "ES8311 I2C SCL GPIO"
+	default 12
+
+config AI_VOX3_ES8311_I2C_SDA
+	int "ES8311 I2C SDA GPIO"
+	default 13
+
+config AI_VOX3_ES8311_I2C_ADDR
+	int "ES8311 I2C address"
+	default 0x18
+
+config AI_VOX3_I2S_MCLK
+	int "I2S MCLK GPIO"
+	default 11
+
+config AI_VOX3_I2S_BCLK
+	int "I2S BCLK GPIO"
+	default 10
+
+# TODO(real-device): the three I2S data pins are documented inconsistently.
+config AI_VOX3_I2S_WS
+	int "I2S WS/LRCK GPIO (9 or 8 — verify on HW)"
+	default 9
+
+config AI_VOX3_I2S_DOUT
+	int "I2S DOUT/ASDOUT GPIO (8 or 7 — verify on HW)"
+	default 8
+
+config AI_VOX3_I2S_DIN
+	int "I2S DIN/DSDIN GPIO (7 or 9 — verify on HW)"
+	default 7
+
+config AI_VOX3_SERVO0_GPIO
+	int "Servo 0 GPIO"
+	default 42
+
+config AI_VOX3_SERVO1_GPIO
+	int "Servo 1 GPIO"
+	default 43
+
+config AI_VOX3_SERVO2_GPIO
+	int "Servo 2 GPIO"
+	default 44
+
+config AI_VOX3_SERVO3_GPIO
+	int "Servo 3 GPIO"
+	default 48
+
+config AI_VOX3_WS2812_GPIO
+	int "WS2812 GPIO"
+	default 41
+
+config AI_VOX3_SD_CMD_GPIO
+	int "SD CMD GPIO"
+	default 38
+
+config AI_VOX3_SD_CLK_GPIO
+	int "SD CLK GPIO"
+	default 39
+
+config AI_VOX3_SD_DAT0_GPIO
+	int "SD DAT0 GPIO"
+	default 40
+
+config AI_VOX3_BTN_A_GPIO
+	int "Button A GPIO"
+	default 46
+
+config AI_VOX3_BTN_B_GPIO
+	int "Button B GPIO"
+	default 45
+
+config AI_VOX3_BTN_BOOT_GPIO
+	int "Button BOOT GPIO"
+	default 0
+
+config AI_VOX3_BAT_ADC_GPIO
+	int "Battery ADC GPIO"
+	default 18
+	# TODO(real-device): calibrate divider ratio / mV-per-LSB.
+
+endmenu
+
+endif

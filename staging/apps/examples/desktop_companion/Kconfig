@@ -1,0 +1,40 @@
+#
+# apps/examples/desktop_companion/Kconfig
+#
+# Kconfig for the AI-VOX3 desktop companion example application.
+#
+# NOTE: To be picked up by the build, this file must be sourced from
+# apps/examples/Kconfig (add:  source "examples/desktop_companion/Kconfig").
+# See staging/README.md for the exact integration steps.
+#
+
+config EXAMPLES_DESKTOP_COMPANION
+  tristate "Desktop Companion (AI-VOX3) example"
+  default n
+  ---help---
+    AI-VOX3 desktop companion application: 5 facial expressions, time/weather/
+    todo desktop cards, a text->LLM(mimo-v2.5-pro)->echo loop, a servo-based
+    face-follow demo (no camera), and a smart-home intent stub.
+
+  if EXAMPLES_DESKTOP_COMPANION
+
+  config AIVOX3_LLM_API_KEY
+    string "LLM API key (injected at build; NEVER commit plaintext)"
+    default ""
+    ---help---
+      API key for the mimo-v2.5-pro endpoint. Leave empty to inject it at
+      runtime via NVS. The source tree MUST NOT contain the real secret;
+      prefer menuconfig or an NVS-stored value.
+
+  config AIVOX3_LLM_MODEL
+    string "LLM model name"
+    default "mimo-v2.5-pro"
+
+  config SMART_HOME_BACKEND
+    string "Smart-home backend (none/mqtt/http)"
+    default "none"
+    ---help---
+      Selects the smart-home backend. The default "none" makes
+      smart_home_control() parse intent and return "unconfigured".
+
+  endif
