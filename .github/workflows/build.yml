@@ -72,11 +72,14 @@ jobs:
       - name: Build AI-VOX3 openvela config (direct NuttX Make flow — esp32s3 has no cmake support)
         working-directory: openvela
         run: |
-          set -o pipefail
           CFG="vendor/espressif/boards/esp32s3/ai_vox3/configs/openvela"
-          source build/envsetup.sh
-          lunch "$CFG"
-          make -j"$(nproc)" 2>&1 | tee build.log
+          { echo "PWD=$PWD"; ls -la build | head -25; } > build.log 2>&1 || true
+          source build/envsetup.sh >> build.log 2>&1 || { echo "== ENSETUP FAILED ==" >> build.log; exit 1; }
+          echo "ENSETUP OK" >> build.log
+          lunch "$CFG" >> build.log 2>&1 || { echo "== LUNCH FAILED ==" >> build.log; exit 1; }
+          echo "LUNCH OK" >> build.log
+          set -o pipefail
+          make -j"$(nproc)" 2>&1 | tee -a build.log
           ls -la nuttx/nuttx nuttx/nuttx.bin 2>/dev/null || true
 
       - name: Collect firmware (merge if needed)
