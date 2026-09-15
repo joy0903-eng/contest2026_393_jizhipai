@@ -32,25 +32,23 @@ jobs:
           git config --global user.name "OpenVela Contest CI"
           git config --global http.postBuffer 524288000
 
-      - name: repo init
+      - name: repo init + sync (unified, fail loud)
         run: |
           mkdir -p openvela
           cd openvela
+          set -o pipefail
           repo init -u "https://github.com/${{ github.repository }}" \
             -b dev-ai-contest-2026 \
             -m contest2026_393_jizhipai.xml \
             --repo-url=https://mirrors.tuna.tsinghua.edu.cn/git/git-repo/ \
-            --depth=1
-
-      - name: repo sync
-        working-directory: openvela
-        run: |
-          set -o pipefail
-          (repo sync -c -j8 --no-clone-bundle || repo sync -c -j4 --no-clone-bundle) 2>&1 | tee sync.log | tail -n 30
-          echo "=== 同步结果自检 ==="
-          ls -la build.sh || echo "!! build.sh 不存在"
-          ls build/ 2>/dev/null | head -n5 || echo "!! build/ 目录不存在"
-          repo list 2>/dev/null | wc -l
+            --depth=1 2>&1 | tee init.log
+          (repo sync -c -j4 --no-clone-bundle) 2>&1 | tee sync.log
+          echo "=== 同步自检 ===" | tee -a sync.log
+          ls -la build.sh 2>&1 | tee -a sync.log || true
+          [ -f build.sh ] || { cp build/tools/build.sh build.sh 2>/dev/null && echo "已从 build/tools 兜底复制 build.sh" | tee -a sync.log; }
+          ls build/ 2>/dev/null | head -n5 | tee -a sync.log || true
+          repo list 2>/dev/null | wc -l | tee -a sync.log
+          test -f build.sh || { echo "FATAL: build.sh 仍不存在" | tee -a sync.log; exit 1; }
 
       - name: Pull Git LFS objects (best effort)
         working-directory: openvela
@@ -75,6 +73,7 @@ jobs:
         run: |
           tail -c 2000000 openvela/build.log > build_tail.log 2>/dev/null || echo "no build.log" > build_tail.log
           tail -c 2000000 openvela/sync.log > sync_tail.log 2>/dev/null || echo "no sync.log" > sync_tail.log
+          tail -c 2000000 openvela/init.log > init_tail.log 2>/dev/null || echo "no init.log" > init_tail.log
           ls -la openvela > dirlist.txt 2>&1 || true
           git config --global user.email "ci@openvela-contest.local"
           git config --global user.name "OpenVela CI"
@@ -83,6 +82,7 @@ jobs:
           cp "${{ github.workspace }}/build_tail.log" .
           cp "${{ github.workspace }}/dirlist.txt" .
           cp "${{ github.workspace }}/sync_tail.log" . 2>/dev/null || true
+          cp "${{ github.workspace }}/init_tail.log" . 2>/dev/null || true
           git add -A
           git commit -q -m "build log run #${{ github.run_number }}"
           git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
