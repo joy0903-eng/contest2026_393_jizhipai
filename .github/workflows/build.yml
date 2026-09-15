@@ -61,8 +61,8 @@ jobs:
 
       - name: Install AI-VOX3 BSP + app (validated staging layout, Make flow)
         run: |
-          cp -r staging/vendor_espressif/boards/esp32s3/ai_vox3 openvela/vendor/espressif/boards/esp32s3/ai_vox3
-          cp -r staging/apps/examples/desktop_companion openvela/apps/examples/desktop_companion
+          cp -r team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3 openvela/vendor/espressif/boards/esp32s3/ai_vox3
+          cp -r team_repo/staging/apps/examples/desktop_companion openvela/apps/examples/desktop_companion
           grep -q 'examples/desktop_companion/Kconfig' openvela/apps/examples/Kconfig \
             || echo 'source "examples/desktop_companion/Kconfig"' >> openvela/apps/examples/Kconfig
           grep -q 'CONFIG_EXAMPLES_DESKTOP_COMPANION' openvela/apps/examples/Make.defs \
