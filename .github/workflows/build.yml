@@ -69,19 +69,15 @@ jobs:
             || printf '\nifeq ($(CONFIG_EXAMPLES_DESKTOP_COMPANION),y)\n  CONFIGURED_APPS += $(APPDIR)/examples/desktop_companion\nendif\n' >> openvela/apps/examples/Make.defs
           echo "BSP+应用已就位"
 
-      - name: Build AI-VOX3 openvela config (cmake, fallback to make flow)
+      - name: Build AI-VOX3 openvela config (direct NuttX Make flow — esp32s3 has no cmake support)
         working-directory: openvela
         run: |
           set -o pipefail
-          BUILD_SH=$(find .. -maxdepth 2 -name build.sh | head -1)
-          [ -n "$BUILD_SH" ] || { echo "ERROR: build.sh 未找到"; exit 1; }
-          CFG="vendor/espressif/boards/esp32s3/ai_vox3/configs/openvela/"
-          if ! "$BUILD_SH" "$CFG" --cmake -j"$(nproc)" 2>&1 | tee build.log; then
-            echo "!! --cmake 构建失败，回退传统构建"
-            rm -rf cmake_out
-            "$BUILD_SH" "$CFG" -j"$(nproc)" 2>&1 | tee -a build.log
-          fi
-          find . -maxdepth 3 -name 'nuttx*' -o -maxdepth 3 -name 'bootloader*' | head -10
+          CFG="vendor/espressif/boards/esp32s3/ai_vox3/configs/openvela"
+          source build/envsetup.sh
+          lunch "$CFG"
+          make -j"$(nproc)" 2>&1 | tee build.log
+          ls -la nuttx/nuttx nuttx/nuttx.bin 2>/dev/null || true
 
       - name: Collect firmware (merge if needed)
         if: always()
