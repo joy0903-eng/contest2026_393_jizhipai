@@ -67,19 +67,25 @@ jobs:
             || echo 'source "examples/desktop_companion/Kconfig"' >> openvela/apps/examples/Kconfig
           grep -q 'CONFIG_EXAMPLES_DESKTOP_COMPANION' openvela/apps/examples/Make.defs \
             || printf '\nifeq ($(CONFIG_EXAMPLES_DESKTOP_COMPANION),y)\n  CONFIGURED_APPS += $(APPDIR)/examples/desktop_companion\nendif\n' >> openvela/apps/examples/Make.defs
+          mkdir -p openvela/vendor/espressif/boards/esp32s3/common/configs
           echo "BSP+应用已就位"
 
-      - name: Build AI-VOX3 openvela config (direct NuttX Make flow — esp32s3 has no cmake support)
+      - name: Build AI-VOX3 openvela config (official m() Makefile chain via VELA_USE_MAKEFILE=1)
         working-directory: openvela
         run: |
           CFG="vendor/espressif/boards/esp32s3/ai_vox3/configs/openvela"
-          { echo "PWD=$PWD"; ls -la build | head -25; } > build.log 2>&1 || true
+          pip3 install --quiet kconfiglib || pip install --quiet kconfiglib || true
+          { echo "PWD=$PWD"; ls -d nuttx apps build vendor/espressif/boards/esp32s3/ai_vox3 2>&1; } > build.log 2>&1 || true
           source build/envsetup.sh >> build.log 2>&1 || { echo "== ENSETUP FAILED ==" >> build.log; exit 1; }
           echo "ENSETUP OK" >> build.log
           lunch "$CFG" >> build.log 2>&1 || { echo "== LUNCH FAILED ==" >> build.log; exit 1; }
           echo "LUNCH OK" >> build.log
+          export VELA_USE_MAKEFILE=1
+          echo "VELA_USE_MAKEFILE=1 (force _do_makefile_build)" >> build.log
           set -o pipefail
-          make -j"$(nproc)" 2>&1 | tee -a build.log
+          m -j"$(nproc)" 2>&1 | tee -a build.log
+          rc=$?
+          echo "M-CHAIN rc=$rc" >> build.log
           ls -la nuttx/nuttx nuttx/nuttx.bin 2>/dev/null || true
 
       - name: Collect firmware (merge if needed)
