@@ -61,7 +61,30 @@ jobs:
       - name: Build (AI-VOX3 desktop companion / ESP32-S3-R8)
         working-directory: openvela
         run: |
-          ./build.sh vendor/openvela/boards/contest2026_393_board/configs/openvela --cmake -j"$(nproc)"
+          set -o pipefail
+          ./build.sh vendor/openvela/boards/contest2026_393_board/configs/openvela --cmake -j"$(nproc)" 2>&1 | tee build.log
+
+      - name: Upload build log on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REPO_API="https://api.github.com/repos/${{ github.repository }}"
+          RESP=$(curl -sS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$REPO_API/releases" \
+            -d "{\"tag_name\":\"log-${{ github.run_number }}\",\"name\":\"build-log-${{ github.run_number }}\",\"body\":\"failure diagnostics\"}")
+          UP=$(echo "$RESP" | grep -o '"upload_url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's/{.*}//')
+          if [ -n "$UP" ]; then
+            tail -c 2000000 build.log > build_tail.log 2>/dev/null || true
+            curl -sS -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Content-Type: text/plain" \
+              --data-binary "@build_tail.log" \
+              "$UP?name=build_tail.log" | head -c 200
+            echo "日志已上传到 Release log-${{ github.run_number }}"
+          fi
 
       - name: Locate build outputs
         id: outputs
