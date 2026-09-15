@@ -53,7 +53,7 @@ jobs:
             -b dev-ai-contest-2026 -m openvela.xml --git-lfs >> init.log 2>&1 \
             || { echo "== INIT FAILED ==" >> init.log; exit 1; }
           echo "INIT OK" >> init.log
-          (repo sync -c -j4 --depth=1 --no-tags) >> sync.log 2>&1 \
+          (repo sync -c -j4 --no-tags) >> sync.log 2>&1 \
             || { echo "== SYNC FAILED ==" >> sync.log; exit 1; }
           echo "SYNC OK" >> sync.log
           echo "=== 自检 ===" >> sync.log
