@@ -102,6 +102,11 @@ jobs:
           tail -c 2000000 openvela/sync.log > sync_tail.log 2>/dev/null || echo "no sync.log" > sync_tail.log
           tail -c 2000000 openvela/init.log > init_tail.log 2>/dev/null || echo "no init.log" > init_tail.log
           ls -la openvela > dirlist.txt 2>&1 || true
+          # ★ CMake 错误现场抓取（CMakeLists.txt:706 get_filename_component）
+          sed -n '690,725p' openvela/nuttx/CMakeLists.txt > cmake706.txt 2>/dev/null || echo "no nuttx CMakeLists" > cmake706.txt
+          grep -n "get_filename_component" openvela/nuttx/CMakeLists.txt > cmcall.txt 2>/dev/null || true
+          cp openvela/cmake_out/contest2026_393_board_openvela/CMakeFiles/CMakeError.log cmake_err.log 2>/dev/null || true
+          tail -c 3000 openvela/cmake_out/contest2026_393_board_openvela/CMakeCache.txt > cmake_cache_tail.txt 2>/dev/null || true
           git config --global user.email "ci@openvela-contest.local"
           git config --global user.name "OpenVela CI"
           mkdir -p /tmp/pub && cd /tmp/pub
@@ -112,6 +117,10 @@ jobs:
           cp "${{ github.workspace }}/init_tail.log" . 2>/dev/null || true
           cp "${{ github.workspace }}/openvela/init_err.log" . 2>/dev/null || true
           cp "${{ github.workspace }}/openvela/sync_err.log" . 2>/dev/null || true
+          cp "${{ github.workspace }}/cmake706.txt" . 2>/dev/null || true
+          cp "${{ github.workspace }}/cmcall.txt" . 2>/dev/null || true
+          cp "${{ github.workspace }}/cmake_err.log" . 2>/dev/null || true
+          cp "${{ github.workspace }}/cmake_cache_tail.txt" . 2>/dev/null || true
           git add -A
           git commit -q -m "build log run #${{ github.run_number }}"
           git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
