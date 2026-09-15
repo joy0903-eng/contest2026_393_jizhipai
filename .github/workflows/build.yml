@@ -73,6 +73,22 @@ jobs:
           mkdir -p openvela/contest2026_393_jizhipai
           ( cd team_repo && git archive HEAD ) | tar -x -C openvela/contest2026_393_jizhipai
 
+      - name: Install xtensa-esp32s3 toolchain (run9 fix - compiler missing and double-dash name)
+        run: |
+          mkdir -p $HOME/xt && cd $HOME/xt
+          curl -fSL -o xt.tar.xz \
+            https://github.com/espressif/crosstool-NG/releases/download/esp-13.2.0_20240530/xtensa-esp-elf-13.2.0_20240530-x86_64-linux-gnu.tar.xz
+          tar -xf xt.tar.xz
+          TC_BIN="$HOME/xt/xtensa-esp-elf/bin"
+          echo "$TC_BIN" >> $GITHUB_PATH
+          # 构建系统拼接出的编译器名带双横线（xtensa-esp32s3-elf--gcc），做别名兜底
+          for t in gcc g++ cpp ld objcopy objdump ar nm size strings as readelf gdb; do
+            ln -sf xtensa-esp-elf-$t "$TC_BIN/xtensa-esp32s3-elf--$t" || true
+            ln -sf xtensa-esp-elf-$t "$TC_BIN/xtensa-esp32s3-elf-$t" || true
+          done
+          "$TC_BIN/xtensa-esp32s3-elf--gcc" --version | head -n1
+          "$TC_BIN/xtensa-esp32s3-elf-gcc" --version | head -n1
+
       - name: Build (AI-VOX3 desktop companion / ESP32-S3-R8)
         working-directory: openvela
         run: |
