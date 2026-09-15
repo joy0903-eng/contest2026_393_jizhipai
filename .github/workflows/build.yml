@@ -109,8 +109,20 @@ jobs:
 
       - name: Release firmware (downloadable without login)
         if: success()
-        uses: softprops/action-ghrelease@v2
-        with:
-          tag_name: fw-${{ github.run_number }}
-          name: firmware-build-${{ github.run_number }}
-          files: openvela/nuttx.merged.bin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REPO_API="https://api.github.com/repos/${{ github.repository }}"
+          CREATE_RESP=$(curl -sS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$REPO_API/releases" \
+            -d "{\"tag_name\":\"fw-${{ github.run_number }}\",\"name\":\"firmware-${{ github.run_number }}\",\"body\":\"OpenVela firmware build\"}")
+          UPLOAD_URL=$(echo "$CREATE_RESP" | grep -o '"upload_url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's/{.*}//')
+          if [ -z "$UPLOAD_URL" ]; then echo "创建 Release 失败"; echo "$CREATE_RESP" | head -c 500; exit 1; fi
+          curl -sS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary "@openvela/nuttx.merged.bin" \
+            "$UPLOAD_URL?name=nuttx.merged.bin" | head -c 300
+          echo "Release 固件已上传"
