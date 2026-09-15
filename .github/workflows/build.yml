@@ -11,6 +11,8 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
+    permissions:
+      contents: write
     steps:
       - name: Checkout team repo (our changes)
         uses: actions/checkout@v4
@@ -104,3 +106,11 @@ jobs:
             openvela/nuttx.merged.bin
             openvela/nuttx.bin
           if-no-files-found: warn
+
+      - name: Release firmware (downloadable without login)
+        if: success()
+        uses: softprops/action-ghrelease@v2
+        with:
+          tag_name: fw-${{ github.run_number }}
+          name: firmware-build-${{ github.run_number }}
+          files: openvela/nuttx.merged.bin
