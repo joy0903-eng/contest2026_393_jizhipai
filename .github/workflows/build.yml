@@ -25,8 +25,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y git git-lfs python3 python3-pip curl rsync
           git lfs install
-          sudo curl -sSL https://mirrors.tuna.tsinghua.edu.cn/git/git-repo/repo -o /usr/local/bin/repo
+          # ★ 修复（run#7 根因）：-f 失败即报错 + 官方源（Azure runner 可达），
+          #   原来无 -f 时清华镜像超时会写入 0 字节空脚本 → repo 全程静默假成功
+          sudo curl -fSL https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo
           sudo chmod a+x /usr/local/bin/repo
+          test -s /usr/local/bin/repo || { echo "repo 脚本下载失败（空文件）"; exit 1; }
+          head -n2 /usr/local/bin/repo
+          repo --version
           pip install --quiet esptool
           git config --global user.email "ci@openvela-contest.local"
           git config --global user.name "OpenVela Contest CI"
@@ -40,7 +45,6 @@ jobs:
           repo init -u "https://github.com/${{ github.repository }}" \
             -b dev-ai-contest-2026 \
             -m contest2026_393_jizhipai.xml \
-            --repo-url=https://mirrors.tuna.tsinghua.edu.cn/git/git-repo/ \
             --depth=1 2>&1 | tee init.log
           (repo sync -c -j4 --no-clone-bundle) 2>&1 | tee sync.log
           echo "=== 同步自检 ===" | tee -a sync.log
