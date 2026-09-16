@@ -29,9 +29,12 @@ CONFIG_ESP32S3_SPIRAM=y
 CONFIG_ESP32S3_SPIRAM_MODE_OCT=y
 CONFIG_ESP32S3_SPIRAM_SPEED_80M=y
 
-# SMP is REQUIRED by the esp-hal-3rdparty chip layer: without CONFIG_SMP,
-# LOCK_INITIALIZER_UNLOCKED expands to 0 and clk_ctrl_os.c:39 fails to
-# initialize a lock_type_t struct (run#23). Matches official esp32s3-eye.
+# SMP: ESP32-S3 is dual-core; matches the official esp32s3-eye defconfig.
+# (Attribution note: the esp-hal-3rdparty clk_ctrl_os.c "invalid initializer"
+# error was NOT caused by missing SMP -- OpenVela's spinlock_t is a struct in
+# every branch of spinlock_type.h, so the HAL's "= 0" init is invalid either
+# way. That is fixed by the HAL pre-seed patch step in build.yml. SMP stays
+# enabled for correct dual-core semantics and official-board parity.)
 CONFIG_SMP=y
 CONFIG_SMP_NCPUS=2
 

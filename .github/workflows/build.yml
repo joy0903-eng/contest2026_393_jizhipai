@@ -86,6 +86,39 @@ jobs:
           echo "ENSETUP OK" >> build.log
           lunch "$CFG" >> build.log 2>&1 || { echo "== LUNCH FAILED ==" >> build.log; exit 1; }
           echo "LUNCH OK" >> build.log
+          # ------------------------------------------------------------------
+          # Pre-seed esp-hal-3rdparty at the pinned commit and fix its lock
+          # initializer BEFORE the build's own clone step (run#23/#24):
+          # OpenVela's nuttx defines spinlock_t as a STRUCT unconditionally
+          # (include/nuttx/spinlock_type.h, all three branches), but
+          # espressif/esp-hal-3rdparty@9fc713a initializes it with scalar 0
+          # (components/esp_hw_support/clk_ctrl_os.c:39
+          #   "static lock_type_t periph_spinlock = LOCK_INITIALIZER_UNLOCKED"
+          #  with LOCK_INITIALIZER_UNLOCKED hard-coded to 0 under __NuttX__)
+          # -> "error: invalid initializer" regardless of CONFIG_SMP.
+          # The build's context target skips its clone when the directory
+          # already exists, so we clone the pinned commit, rewrite the
+          # initializer to SP_UNLOCKED (defined by all spinlock_type.h
+          # branches), and let the normal build proceed on top.
+          # ------------------------------------------------------------------
+          {
+            mkdir -p nuttx/arch/xtensa/src/esp32s3
+            if [ ! -e nuttx/arch/xtensa/src/chip ]; then ln -s esp32s3 nuttx/arch/xtensa/src/chip; fi
+            HALDIR="nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty"
+            if [ ! -d "$HALDIR" ]; then
+              rm -rf "$HALDIR"
+              git init -q "$HALDIR"
+              git -C "$HALDIR" remote add origin https://github.com/espressif/esp-hal-3rdparty.git
+              git -C "$HALDIR" fetch -q --depth 1 origin 9fc713a95b1ff150dd0b0647e465d3c624056bb1 \
+                || { rm -rf "$HALDIR"; git clone -q https://github.com/espressif/esp-hal-3rdparty.git "$HALDIR"; }
+              git -C "$HALDIR" checkout -q FETCH_HEAD 2>/dev/null || git -C "$HALDIR" checkout -q 9fc713a95b1ff150dd0b0647e465d3c624056bb1
+            fi
+            grep -rl "LOCK_INITIALIZER_UNLOCKED" "$HALDIR/components" | xargs -r sed -i \
+              's/^#define LOCK_INITIALIZER_UNLOCKED[[:space:]]*0[[:space:]]*$/#define LOCK_INITIALIZER_UNLOCKED SP_UNLOCKED/'
+            echo "== esp-hal-3rdparty pre-seeded, lock-init patched: =="
+            grep -n "define LOCK_INITIALIZER_UNLOCKED" "$HALDIR/components/esp_hw_support/clk_ctrl_os.c"
+          } >> build.log 2>&1 || { echo "== HAL PRESEED FAILED ==" >> build.log; exit 1; }
+          echo "HAL PRESEED OK" >> build.log
           export VELA_USE_MAKEFILE=1
           # Override the envsetup default (which appends -Werror): the official
           # esp32s3 chip layer (esp32s3_libc_stubs.c 'noreturn' warning) does not
