@@ -240,7 +240,18 @@ jobs:
         working-directory: openvela
         run: |
           mkdir -p firmware
-          find nuttx -maxdepth 2 \( -name 'nuttx.bin' -o -name 'bootloader.bin' -o -name 'partition-table.bin' -o -name 'nuttx.merged.bin' \) -exec cp -v {} firmware/ \; 2>/dev/null || true
+          # run#39: only nuttx.bin surfaced at depth<=2.  The bootloader
+          # (esp-hal-3rdparty build) and the partition table live deeper
+          # in the tree -- search FULL depth and record every .bin found
+          # (binlist.txt ships in the firmware branch as forensics).
+          find nuttx -name '*.bin' -exec ls -la {} \; > binlist.txt 2>&1 || true
+          tail -c 3000 binlist.txt || true
+          find nuttx -name 'nuttx.bin'          -exec cp -v {} firmware/ \; 2>/dev/null || true
+          find nuttx -name 'bootloader*.bin'    -exec cp -v {} firmware/ \; 2>/dev/null || true
+          find nuttx -name 'partition*.bin'     -exec cp -v {} firmware/ \; 2>/dev/null || true
+          find nuttx -name 'nuttx.merged.bin'   -exec cp -v {} firmware/ \; 2>/dev/null || true
+          cp -v binlist.txt firmware/ 2>/dev/null || true
+          ls -la firmware || true
           if [ ! -f firmware/nuttx.merged.bin ] && [ -f firmware/bootloader.bin ] && [ -f firmware/partition-table.bin ] && [ -f firmware/nuttx.bin ]; then
             python3 -m esptool --chip esp32s3 merge_bin -o firmware/nuttx.merged.bin \
               --flash-mode dio --flash-freq keep --flash-size keep \
