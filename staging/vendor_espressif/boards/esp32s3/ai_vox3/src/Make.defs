@@ -42,5 +42,9 @@ endif
 VPATH += :board
 CFLAGS += ${INCDIR_PREFIX}$(TOPDIR)$(DELIM)arch$(DELIM)$(CONFIG_ARCH)$(DELIM)src$(DELIM)board$(DELIM)board
 
-# Board-local headers ("board.h" lives in the board include/ directory)
+# Board-local headers ("board.h" lives in the board include/ directory).
+# BOARD_COMMON_DIR is empty when CONFIG_ARCH_BOARD_COMMON is unset (our case,
+# see configs/openvela/defconfig) -- guard against expanding to "-I/include".
+ifneq ($(BOARD_COMMON_DIR),)
 CFLAGS += ${INCDIR_PREFIX}$(BOARD_COMMON_DIR)$(DELIM)include
+endif

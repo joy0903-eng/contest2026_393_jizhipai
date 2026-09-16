@@ -17,7 +17,15 @@ CONFIG_ARCH_CHIP="esp32s3"
 CONFIG_ARCH_CHIP_ESP32S3=y
 CONFIG_ARCH_CHIP_ESP32S3WROOM1N16R8=y
 
-CONFIG_ARCH_BOARD_COMMON=y
+# NOTE: CONFIG_ARCH_BOARD_COMMON is deliberately NOT set.  OpenVela's
+# tools/Directories.mk resolves BOARD_COMMON_DIR to "$(BOARD_DIR)/../common"
+# when this is set, i.e. vendor/espressif/boards/esp32s3/common -- a directory
+# that does NOT exist in the vendor tree (run#25 proof: the build log shows
+# "LN: arch/xtensa/src/board to .../ai_vox3/../common", a dangling symlink,
+# followed by "make[1]: *** No rule to make target 'libboard.a'").  With the
+# symbol unset, tools/Unix.mk takes the else branch and links
+# arch/xtensa/src/board directly to our src/, which now ships its own
+# standard board Makefile (see ../src/Makefile).
 CONFIG_ARCH_BOARD_CUSTOM=y
 CONFIG_ARCH_BOARD_CUSTOM_DIR="../vendor/espressif/boards/esp32s3/ai_vox3"
 CONFIG_ARCH_BOARD_CUSTOM_DIR_RELPATH=y
