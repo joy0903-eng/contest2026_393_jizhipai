@@ -295,6 +295,21 @@ jobs:
             # chain and catches any other shadowed/missing dep.
             python3 -c "import idf_component_manager.core, sys; print('idf_component_manager.core OK on', sys.executable)" \
               || { echo "== IDF-COMPONENT-MANAGER IMPORT FAILED =="; exit 1; }
+            # run#45 (esp-idf@1559b63 forensics): project.cmake does
+            #   if(NOT "$ENV{IDF_COMPONENT_MANAGER}" EQUAL "0")
+            #     idf_build_set_property(IDF_COMPONENT_MANAGER 1)
+            #   idf_build_set_property(__COMPONENT_MANAGER_INTERFACE_VERSION 2)
+            # so the cmake stage invokes
+            #   python -m idf_component_manager.prepare_components
+            #     --interface_version=2 ...
+            # and icm 3.1.2 rejects version 2 ("invalid choice: 2 (choose
+            # from 4, 5, 6)").  The bootloader project only uses built-in
+            # IDF components, so export IDF_COMPONENT_MANAGER=0: the
+            # idf_build_process in build.cmake then SKIPS the
+            # prepare_components call entirely (the property stays at the
+            # 0 default from __build_init; no managed components involved).
+            export IDF_COMPONENT_MANAGER=0
+            echo "IDF_COMPONENT_MANAGER=$IDF_COMPONENT_MANAGER"
             echo "== make -C nuttx bootloader =="
             make -C nuttx bootloader 2>&1 || echo "== BOOTLOADER MAKE FAILED (full output above) =="
             echo "== bootloader products in nuttx/: =="
