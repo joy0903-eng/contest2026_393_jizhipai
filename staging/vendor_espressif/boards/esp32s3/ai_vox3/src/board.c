@@ -19,6 +19,8 @@
 #include <nuttx/lcd/lcd.h>
 #include <nuttx/arch.h>
 
+#include <stdint.h>
+
 #include <debug.h>
 #include <syslog.h>
 
@@ -148,11 +150,11 @@ struct lcd_dev_s *board_lcd_getdev(int lcddev)
   return ai_vox3_lcd_getdev(lcddev);
 }
 
-#ifdef CONFIG_LCD_FRAMEBUFFER
-int board_lcd_uninitialize(struct lcd_dev_s *dev)
+void board_lcd_uninitialize(void)
 {
-  /* Nothing special to tear down; the framebuffer is PSRAM-backed. */
-  return OK;
+  /* Nothing special to tear down; the framebuffer is PSRAM-backed.
+   * Signature matches the framework prototype (void)void -- the previous
+   * (struct lcd_dev_s *dev) form conflicted with include/nuttx/lcd/lcd.h
+   * (run#28 conflicting-types diagnostic). */
 }
-#endif /* CONFIG_LCD_FRAMEBUFFER */
 #endif /* CONFIG_LCD */
