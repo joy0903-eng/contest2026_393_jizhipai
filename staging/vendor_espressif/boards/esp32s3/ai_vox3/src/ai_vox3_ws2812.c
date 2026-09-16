@@ -28,7 +28,6 @@
 
 #include <esp32s3_rmt.h>
 
-#include "board.h"
 
 /****************************************************************************
  * Pre-processor Definitions

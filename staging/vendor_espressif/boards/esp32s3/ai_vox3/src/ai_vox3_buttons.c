@@ -27,7 +27,6 @@
 #include <arch/board/board.h>
 #include <esp32s3_gpio.h>
 
-#include "board.h"
 
 /****************************************************************************
  * Pre-processor Definitions

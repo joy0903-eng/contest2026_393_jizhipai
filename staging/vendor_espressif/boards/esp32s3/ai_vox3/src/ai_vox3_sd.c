@@ -31,7 +31,6 @@
 #include <esp32s3_gpio.h>
 #include <esp32s3_sdio.h>
 
-#include "board.h"
 
 /****************************************************************************
  * Pre-processor Definitions

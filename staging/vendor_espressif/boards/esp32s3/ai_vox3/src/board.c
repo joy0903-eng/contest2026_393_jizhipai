@@ -22,7 +22,7 @@
 #include <debug.h>
 #include <syslog.h>
 
-#include "board.h"
+#include <arch/board/board.h>
 
 #ifdef CONFIG_BOARDCTL
 #include <sys/boardctl.h>

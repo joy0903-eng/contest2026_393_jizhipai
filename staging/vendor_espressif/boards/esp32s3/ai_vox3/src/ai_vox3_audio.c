@@ -32,7 +32,6 @@
 #include <esp32s3_i2c.h>
 #include <esp32s3_i2s.h>
 
-#include "board.h"
 
 /****************************************************************************
  * Pre-processor Definitions

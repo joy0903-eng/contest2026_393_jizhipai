@@ -27,7 +27,6 @@
 
 #include <esp32s3_ledc.h>
 
-#include "board.h"
 
 /****************************************************************************
  * Pre-processor Definitions
