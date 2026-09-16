@@ -33,19 +33,23 @@ jobs:
           sudo chmod a+x /usr/local/bin/repo
           test -s /usr/local/bin/repo || { echo "repo 下载失败"; exit 1; }
           repo --version
-          # ESPTOOL (run#36/#37 forensics): the runner PRE-INSTALLS esptool
-          # 4.7.0, so the old bare `pip install esptool` was a successful
-          # no-op and the build kept using 4.7.0 (run#35 MKIMAGE death).
-          # The first real install attempt with ">=4.8.0" failed the deps
-          # step twice in a row -- PEP 668 or a resolver conflict with the
-          # newest (5.x) esptool are the suspects.  Try four escalating
-          # variants, keep the full pip transcript, and fail loud only if
-          # every variant fails.
-          { pip install --upgrade "esptool>=4.8.0" \
-              || pip install --user --upgrade "esptool>=4.8.0" \
-              || pip install --break-system-packages --upgrade "esptool>=4.8.0" \
-              || pip install --user --upgrade "esptool==4.9.*" \
-              || { echo "== ALL ESPTOOL INSTALL VARIANTS FAILED =="; exit 1; }; } > pip_esptool.log 2>&1 \
+          # ESPTOOL (run#36..#38 forensics): three stacked problems.
+          #  a) the runner PRE-INSTALLS esptool 4.7.0, so the old bare
+          #     `pip install esptool` was a successful no-op (run#35 built
+          #     with 4.7.0 and died at MKIMAGE);
+          #  b) system site-packages is not writable -> pip defaults to
+          #     --user installs (fine: ~/.local precedes system site);
+          #  c) the stock pip 22.x CANNOT build new esptool sdists -- the
+          #     generated metadata carries project name 'unknown', so every
+          #     candidate >= 4.8.0 gets discarded ('inconsistent name'), and
+          #     pip 22.x does not even know --break-system-packages.
+          # Fix: upgrade pip FIRST (its own wheel is unaffected by c),
+          # then install esptool 4.8.1 -- satisfies the MKIMAGE gate
+          # (>= 4.8.0) with 4.x-era CLI behavior.
+          { python3 -m pip install --user --upgrade pip \
+              || python3 -m pip install --upgrade pip; } > pip_esptool.log 2>&1 || true
+          { python3 -m pip install --user --upgrade "esptool==4.8.1" \
+              || python3 -m pip install --upgrade "esptool==4.8.1"; } >> pip_esptool.log 2>&1 \
             || { echo "== ESPTOOL INSTALL FAILED, transcript: =="; cat pip_esptool.log; exit 1; }
           { echo "== esptool as the build will see it: ==";
             python3 -m esptool version || true;
