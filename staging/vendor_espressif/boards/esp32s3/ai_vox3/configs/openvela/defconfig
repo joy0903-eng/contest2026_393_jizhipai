@@ -29,6 +29,12 @@ CONFIG_ESP32S3_SPIRAM=y
 CONFIG_ESP32S3_SPIRAM_MODE_OCT=y
 CONFIG_ESP32S3_SPIRAM_SPEED_80M=y
 
+# SMP is REQUIRED by the esp-hal-3rdparty chip layer: without CONFIG_SMP,
+# LOCK_INITIALIZER_UNLOCKED expands to 0 and clk_ctrl_os.c:39 fails to
+# initialize a lock_type_t struct (run#23). Matches official esp32s3-eye.
+CONFIG_SMP=y
+CONFIG_SMP_NCPUS=2
+
 # --- Console: native USB-CDC -------------------------------------------------
 CONFIG_ESP32S3_USBSERIAL=y
 CONFIG_ESP32S3_CDCACM=y
