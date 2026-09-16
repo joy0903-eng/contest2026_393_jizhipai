@@ -81,11 +81,12 @@ jobs:
           # for esp32s3_peripherals.ld AND libboard.a.  The .ld scripts are copied
           # from the in-tree nuttx so they always match the nuttx being built.
           mkdir -p openvela/vendor/espressif/boards/esp32s3/common/scripts
-          for f in esp32s3_peripherals.ld esp32s3_rom_aliases.ld flat_memory.ld esp32s3_sections.ld; do
-            cp "openvela/nuttx/boards/xtensa/esp32s3/common/scripts/$f" \
-               "openvela/vendor/espressif/boards/esp32s3/common/scripts/$f" \
-               || { echo "== LDSCRIPT COPY FAILED: $f =="; exit 1; }
-          done
+          # Copy EVERY .ld: flat_memory.ld #includes esp32s3_aliases.ld which
+          # pulls further scripts -- copying only 4 named files broke the
+          # include chain (run#28: "esp32s3_aliases.ld: No such file").
+          cp openvela/nuttx/boards/xtensa/esp32s3/common/scripts/*.ld \
+             openvela/vendor/espressif/boards/esp32s3/common/scripts/ \
+             || { echo "== LDSCRIPT COPY FAILED =="; exit 1; }
           ls -la openvela/vendor/espressif/boards/esp32s3/common/scripts
           # Keep the configs stub that configure's process_config.sh references.
           mkdir -p openvela/vendor/espressif/boards/esp32s3/common/configs

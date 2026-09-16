@@ -75,9 +75,33 @@ CONFIG_EXAMPLES_FB=y
 CONFIG_AUDIO=y
 CONFIG_AUDIO_I2S=y
 CONFIG_ESP32S3_I2S=y
-# TODO(real-device): confirm ES8311 codec Kconfig symbol in menuconfig.
 # TODO(real-device): verify I2S WS/DOUT/DIN pins on real HW (see src/ai_vox3_audio.c).
 CONFIG_EXAMPLES_AUDIO=y
+
+# FSPI (SPI2) bus pins for the LCD -- the ESP32-S3 SPI driver routes these
+# pins itself from the Kconfig values (official esp32s3-box pattern; the
+# manual GPIO-matrix routing in board code was unnecessary and used
+# nonexistent signal names -> run#28 errors).
+CONFIG_ESP32S3_SPI2=y
+CONFIG_ESP32S3_SPI2_CLKPIN=17
+CONFIG_ESP32S3_SPI2_MOSIPIN=21
+CONFIG_ESP32S3_SPI2_MISOPIN=-1
+CONFIG_ESP32S3_SPI2_CSPIN=15
+
+# I2C0 for the ES8311 -- pins likewise routed by the I2C driver itself.
+# CONFIG_ESP32S3_I2C0 also makes esp32s3_i2cbus_initialize() exist (the
+# prototype is gated by CONFIG_ESPRESSIF_I2C_PERIPH_MASTER_MODE).
+CONFIG_ESP32S3_I2C=y
+CONFIG_ESP32S3_I2C0=y
+CONFIG_ESP32S3_I2C0_SCLPIN=12
+CONFIG_ESP32S3_I2C0_SDAPIN=13
+CONFIG_ESP32S3_I2C_PERIPH_MASTER_MODE=y
+
+# ES8311 codec driver.  include/nuttx/audio/es8311.h hides every prototype
+# behind CONFIG_AUDIO_ES8311 (run#28: implicit es8311_initialize despite the
+# include) and #errors without AUDIO/I2S/I2C/SCHED_WORKQUEUE.
+CONFIG_AUDIO_ES8311=y
+CONFIG_SCHED_WORKQUEUE=y
 
 # --- Wi-Fi + network stack ---------------------------------------------------
 CONFIG_ESP32S3_WIFI=y

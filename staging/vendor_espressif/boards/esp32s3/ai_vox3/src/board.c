@@ -113,12 +113,21 @@ int esp_board_initialize(void)
  *
  ****************************************************************************/
 
-#ifndef CONFIG_BOARDCTL
-int board_app_initialize(int argc, char *argv[])
+#ifdef CONFIG_BOARDCTL
+int board_app_initialize(uintptr_t arg)
 {
-  return OK;
+  /* Official esp32s3-box pattern (esp32s3_appinit.c): defined UNDER
+   * CONFIG_BOARDCTL with the (uintptr_t arg) signature matching
+   * include/nuttx/board.h, and it performs the board bring-up because this
+   * board does not use CONFIG_BOARD_LATE_INITIALIZE.  NSH (CONFIG_NSH_
+   * ARCHINIT=y) reaches it through BOARDIOC_INIT.  The previous version
+   * here used "#ifndef CONFIG_BOARDCTL" -- compiling the function out
+   * exactly when NSH needed it -- and a non-matching (int, char**)
+   * signature. */
+
+  return esp_board_initialize();
 }
-#endif
+#endif /* CONFIG_BOARDCTL */
 
 /****************************************************************************
  * Name: board_lcd_initialize / board_lcd_getdev

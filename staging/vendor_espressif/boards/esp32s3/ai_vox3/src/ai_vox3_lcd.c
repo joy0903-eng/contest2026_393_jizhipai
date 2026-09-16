@@ -6,13 +6,15 @@
  * Pin mapping (board.h):
  *   MOSI=21, SCL=17, DC=14, CS=15, BL=16, RST=-1
  *
- * The SPI clock/data pins are routed to the FSPI peripheral via the GPIO
- * matrix; DC / CS / BL are driven as plain GPIOs (the ST7789 NuttX driver
- * controls DC and CS through these pins).
+ * The SPI clock/data/CS pins are routed by the ESP32-S3 SPI driver itself
+ * (CONFIG_ESP32S3_SPI2_CLKPIN/MOSIPIN/CSPIN in the defconfig) -- the same
+ * pattern as the official esp32s3-box LCD bring-up, which does NOT do any
+ * manual GPIO-matrix routing for the bus.  Only DC and BL are plain GPIOs.
+ * esp32s3_spi2_status/_cmddata are the board hooks the chip driver requires
+ * (CONFIG_SPI_CMDDATA drives the D/C line for the ST7789).
  *
  * TODO(real-device): ST7789 color order (RGB vs BGR) and panel rotation must
- * be confirmed on the real LCD. They are typically set via Kconfig
- * (CONFIG_LCD_ST7789_* ) or passed to the driver — adjust once verified.
+ * be confirmed on the real LCD.
  *
  ****************************************************************************/
 
@@ -22,30 +24,20 @@
 
 #include <nuttx/config.h>
 
+#include <stdint.h>
+#include <stdbool.h>
 #include <errno.h>
 #include <debug.h>
 #include <syslog.h>
 
+#include <nuttx/spi/spi.h>
 #include <nuttx/lcd/lcd.h>
 #include <nuttx/lcd/st7789.h>
 
 #include <arch/board/board.h>
+
 #include <esp32s3_gpio.h>
-
-
-/****************************************************************************
- * Pre-processor Definitions
- ****************************************************************************/
-
-/* FSPI (SPI2) output signals on ESP32-S3 for GPIO matrix routing.
- * TODO(real-device): confirm exact signal enum names in the current tree
- * (esp32s3_gpio_sigmap.h). The names below match the common ESP32-S3 SDK. */
-#define AI_VOX3_FSPICLK_OUT    FSPICLK_OUT    /* SCL */
-#define AI_VOX3_FSPID_OUT      FSPID_OUT      /* MOSI (data out) */
-#define AI_VOX3_FSPICS0_OUT    FSPICS0_OUT    /* CS */
-
-/* GPIO attribute helpers (esp32s3). */
-#define GPIO_OUTPUT_PIN(gpio)  (GPIO_OUTPUT_PINMUX(gpio))
+#include <esp32s3_spi.h>
 
 /****************************************************************************
  * Private Data
@@ -58,30 +50,63 @@ static struct lcd_dev_s *g_lcddev = NULL;
  ****************************************************************************/
 
 /****************************************************************************
+ * Name: esp32s3_spi2_status
+ *
+ * Description:
+ *   Board-provided SPI status hook (required by the ESP32-S3 chip driver;
+ *   no SPI status bits on this board).
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_ESP32S3_SPI2
+uint8_t esp32s3_spi2_status(struct spi_dev_s *dev, uint32_t devid)
+{
+  return 0;
+}
+
+/****************************************************************************
+ * Name: esp32s3_spi2_cmddata
+ *
+ * Description:
+ *   Board-provided SPI cmd/data hook (CONFIG_SPI_CMDDATA): drives the
+ *   ST7789 D/C line.  Low = command, high = data.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_SPI_CMDDATA
+int esp32s3_spi2_cmddata(struct spi_dev_s *dev, uint32_t devid, bool cmd)
+{
+  if (devid == SPIDEV_DISPLAY(0))
+    {
+      esp32s3_gpiowrite(BOARD_LCD_DC_GPIO, !cmd);
+      return OK;
+    }
+
+  return -ENODEV;
+}
+#endif /* CONFIG_SPI_CMDDATA */
+#endif /* CONFIG_ESP32S3_SPI2 */
+
+/****************************************************************************
  * Name: ai_vox3_lcd_initialize
  *
  * Description:
- *   Initialize the FSPI bus, route pins, configure control GPIOs and bind the
- *   ST7789 LCD driver. Returns OK on success.
+ *   Configure control GPIOs, initialize the FSPI bus (the driver routes
+ *   SCLK/MOSI/CS itself per CONFIG_ESP32S3_SPI2_*PIN) and bind the ST7789
+ *   driver.  Returns OK on success.
  *
  ****************************************************************************/
 
 int ai_vox3_lcd_initialize(void)
 {
   struct spi_dev_s *spi;
-  int ret;
-
-  /* Route FSPI clock + MOSI to the LCD pins via the GPIO matrix. */
-  esp32s3_gpio_matrix_out(BOARD_LCD_SCL_GPIO, AI_VOX3_FSPICLK_OUT, false, false);
-  esp32s3_gpio_matrix_out(BOARD_LCD_MOSI_GPIO, AI_VOX3_FSPID_OUT, false, false);
-  esp32s3_gpio_matrix_out(BOARD_LCD_CS_GPIO, AI_VOX3_FSPICS0_OUT, false, false);
 
   /* Configure DC and BL as GPIO outputs (RST is absent on this board). */
-  esp32s3_gpio_config(GPIO_OUTPUT_PIN(BOARD_LCD_DC_GPIO));
-  esp32s3_gpio_config(GPIO_OUTPUT_PIN(BOARD_LCD_BL_GPIO));
+  esp32s3_configgpio(BOARD_LCD_DC_GPIO, OUTPUT);
+  esp32s3_configgpio(BOARD_LCD_BL_GPIO, OUTPUT);
 
   /* Turn the backlight on (active high). */
-  esp32s3_gpio_write(BOARD_LCD_BL_GPIO, true);
+  esp32s3_gpiowrite(BOARD_LCD_BL_GPIO, true);
 
   /* Initialize the FSPI bus controller. */
   spi = esp32s3_spibus_initialize(BOARD_LCD_SPI_PORT);
@@ -92,21 +117,12 @@ int ai_vox3_lcd_initialize(void)
       return -ENODEV;
     }
 
-  /* Bind the ST7789 driver to the SPI bus.
-   * Note: upstream signature is st7789_lcdinitialize(spi); if your tree uses
-   * st7789_lcdinitialize(spi, devno) adjust accordingly. */
+  /* Bind the ST7789 driver to the SPI bus. */
   g_lcddev = st7789_lcdinitialize(spi);
   if (g_lcddev == NULL)
     {
       syslog(LOG_ERR, "ERROR: st7789_lcdinitialize failed\n");
       return -ENODEV;
-    }
-
-  /* Clear to black so the panel is not showing random garbage. */
-  ret = g_lcddev->clear(g_lcddev, 0);
-  if (ret < 0)
-    {
-      syslog(LOG_WARNING, "WARNING: LCD clear returned %d\n", ret);
     }
 
   syslog(LOG_INFO, "LCD (ST7789 240x240) initialized\n");
