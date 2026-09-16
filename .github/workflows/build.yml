@@ -375,11 +375,25 @@ jobs:
           # firmware itself (Collect runs `if: always()`).
           tail -c 3000000 build.log > firmware/build_tail.log 2>/dev/null || true
           ls -la firmware || true
+          # run#48 forensics: the bootloader built for the first time
+          # (kconfgen fix ac96470 worked -- 108/108, both products landed
+          # in nuttx/), so this merge ran for the FIRST time -- and
+          # failed: its flags were written in esptool 5.x kebab-case
+          # (--flash-mode), but esptool is pinned to 4.8.1 whose argparse
+          # only accepts underscore spelling (--flash_mode; argparse does
+          # not interchange dashes/underscores).  step_outcomes.txt does
+          # not track the Collect step, so this failure was invisible
+          # except for the untouched firmware branch.  Fix: 4.x spelling
+          # + ship the merge transcript as collect.log (failure path
+          # publishes it to the logs branch for forensics).
           if [ ! -f firmware/nuttx.merged.bin ] && [ -f firmware/bootloader-esp32s3.bin ] && [ -f firmware/partition-table-esp32s3.bin ] && [ -f firmware/nuttx.bin ]; then
-            python3 -m esptool --chip esp32s3 merge_bin -o firmware/nuttx.merged.bin \
-              --flash-mode dio --flash-freq keep --flash-size keep \
-              0x0 firmware/bootloader-esp32s3.bin 0x8000 firmware/partition-table-esp32s3.bin 0x10000 firmware/nuttx.bin
+            { python3 -m esptool --chip esp32s3 merge_bin -o firmware/nuttx.merged.bin \
+                --flash_mode dio --flash_freq keep --flash_size keep \
+                0x0 firmware/bootloader-esp32s3.bin 0x8000 firmware/partition-table-esp32s3.bin 0x10000 firmware/nuttx.bin; } > collect.log 2>&1 \
+              || { echo "== MERGE_BIN FAILED, transcript: =="; cat collect.log; exit 1; }
+            echo "MERGE OK"
           fi
+          cp -v collect.log firmware/ 2>/dev/null || true
           ls -la firmware || true
 
       - name: Publish firmware to firmware branch (SSH-pullable)
@@ -416,6 +430,9 @@ jobs:
           git init -q -b logs .
           cp "${{ github.workspace }}/step_outcomes.txt" .
           cp "${{ github.workspace }}/pip_esptool.log" . 2>/dev/null || true
+          # run#48: the Collect step is not tracked by step_outcomes.txt
+          # and its merge transcript used to be lost on failure -- ship it.
+          cp "${{ github.workspace }}/openvela/collect.log" . 2>/dev/null || true
           cp "${{ github.workspace }}/build_tail.log" .
           cp "${{ github.workspace }}/sync_tail.log" . 2>/dev/null || true
           cp "${{ github.workspace }}/init_tail.log" . 2>/dev/null || true
