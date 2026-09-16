@@ -26,6 +26,10 @@ include $(TOPDIR)/Make.defs
 # self-contained regardless of who includes what)
 CSRCS = board.c
 
+# nxmutex link shim (run#31/#32): unconditionally compiled, see the file
+# header for why it must never be gated by a CONFIG symbol.
+CSRCS += ai_vox3_mutex_shim.c
+
 ifeq ($(CONFIG_LCD_ST7789),y)
 CSRCS += ai_vox3_lcd.c
 endif

@@ -174,6 +174,15 @@ CONFIG_ESP32S3_GPIO_IRQ=y
 # This symbol defaults to DEFAULT_SMALL, so it MUST be pinned off here.
 # CONFIG_LIBC_SEM_MUTEX_NOINLINE is not set
 
+# --- TLS task-local storage (run#32 link fix A) ------------------------------
+# libs/libc/tls builds task_tls.c (task_tls_alloc/get_value/set_value) ONLY
+# when CONFIG_TLS_TASK_NELEM != 0 (libs/libc/tls/Kconfig: int, default 0,
+# range 0-255).  With it left at 0, esp32s3_wifi_adapter.o -- first linked
+# in run#32 once board.c started calling esp32s3_wlan_sta_initialize() --
+# carries undefined task_tls_* references that no library resolves.
+# 8 slots is the common upstream value.
+CONFIG_TLS_TASK_NELEM=8
+
 # --- Application: desktop_companion ------------------------------------------
 CONFIG_BUILTIN=y
 CONFIG_EXAMPLES_DESKTOP_COMPANION=y

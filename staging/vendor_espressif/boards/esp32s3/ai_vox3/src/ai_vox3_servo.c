@@ -124,7 +124,6 @@ static uint32_t servo_angle_to_duty(int angle_deg)
 
 int ai_vox3_servo_initialize(void)
 {
-  struct pwm_info_s info;
   char devpath[16];
   int id;
   int ret;

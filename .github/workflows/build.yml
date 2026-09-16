@@ -105,23 +105,44 @@ jobs:
           lunch "$CFG" >> build.log 2>&1 || { echo "== LUNCH FAILED ==" >> build.log; exit 1; }
           echo "LUNCH OK" >> build.log
           # ------------------------------------------------------------------
+          # AUDIT GATE FIX (run#32): with the Makefile chain `lunch` only
+          # records the selection -- nuttx/.config is created later by
+          # _do_makefile_build INSIDE `m` (open-vela/build envsetup.sh,
+          # verbatim: "if [ ! -r $T/nuttx/.config ]; then
+          #   ${TOOLSDIR}/configure.sh -e $T/nuttx/${BOARD_CONFIG}; fi",
+          # BOARD_CONFIG = ../vendor/<v>/boards/<b>/configs/<c>), so the
+          # audit below silently no-opped ("WARN: .config not found after
+          # lunch; audit skipped" -- run#32 log line 15) and the NOINLINE
+          # check never ran.  Pre-generate .config here with the EXACT same
+          # command; `m` then sees an existing .config ([ ! -r ] fails) and
+          # skips its own configure, so this .config IS the one the build
+          # consumes, and the audit finally runs BEFORE the 40-min compile.
+          # ------------------------------------------------------------------
+          if [ ! -f nuttx/.config ]; then
+            nuttx/tools/configure.sh -e "$PWD/nuttx/../vendor/espressif/boards/esp32s3/ai_vox3/configs/openvela" >> build.log 2>&1 \
+              || { echo "== PRE-CONFIGURE FAILED ==" >> build.log; exit 1; }
+            echo "PRE-CONFIGURE OK (.config materialized before audit)" >> build.log
+          fi
+          # ------------------------------------------------------------------
           # CONFIG AUDIT: olddefconfig silently drops defconfig lines whose
           # Kconfig deps are unmet (run#29 root cause: AUDIO_ES8311 lives
           # behind the unset DRIVERS_AUDIO umbrella -> es8311.h compiled
           # empty). Fail loud HERE instead of 40 minutes into the compile.
           # ------------------------------------------------------------------
-          if [ -f nuttx/.config ]; then
-            echo "== CONFIG AUDIT ==" >> build.log
-            grep -E '^CONFIG_(AUDIO|DRIVERS_AUDIO|I2C|I2S|ES8311|LCD_ST7789|ESP32S3_SPI2|ESPRESSIF)' nuttx/.config >> build.log || true
-            for sym in CONFIG_AUDIO=y CONFIG_DRIVERS_AUDIO=y CONFIG_AUDIO_ES8311=y CONFIG_AUDIO_I2S=y CONFIG_I2C=y CONFIG_I2S=y CONFIG_ESP32S3_I2C0=y CONFIG_ESP32S3_I2C0_MASTER_MODE=y CONFIG_ESPRESSIF_I2C_PERIPH_MASTER_MODE=y CONFIG_ESP32S3_I2S=y CONFIG_ESP32S3_SPI2=y CONFIG_LCD_ST7789=y CONFIG_AI_VOX3_SERVO=y CONFIG_AI_VOX3_BUTTONS=y CONFIG_ESP32S3_LEDC=y CONFIG_ESP32S3_LEDC_TIM0=y CONFIG_ESP32S3_LEDC_TIM0_CHANNELS=1 CONFIG_ESP32S3_LEDC_CHANNEL0_PIN=42 CONFIG_ESP32S3_LEDC_CHANNEL1_PIN=43 CONFIG_ESP32S3_LEDC_CHANNEL2_PIN=44 CONFIG_ESP32S3_LEDC_CHANNEL3_PIN=48 CONFIG_ESP32S3_GPIO_IRQ=y; do
-              grep -qx "$sym" nuttx/.config || { echo "== CONFIG AUDIT FAILED: $sym not in .config ==" >> build.log; exit 1; }
-            done
-            # nxmutex link fix (run#31): the mutex impl must stay inline.
-            grep -qx '# CONFIG_LIBC_SEM_MUTEX_NOINLINE is not set' nuttx/.config || { echo "== CONFIG AUDIT FAILED: CONFIG_LIBC_SEM_MUTEX_NOINLINE must be off ==" >> build.log; exit 1; }
-            echo "CONFIG AUDIT OK" >> build.log
-          else
-            echo "WARN: nuttx/.config not found after lunch; audit skipped" >> build.log
+          if [ ! -f nuttx/.config ]; then
+            echo "== AUDIT GATE FAILED: .config still missing after pre-configure ==" >> build.log
+            exit 1
           fi
+          echo "== CONFIG AUDIT ==" >> build.log
+          grep -E '^CONFIG_(AUDIO|DRIVERS_AUDIO|I2C|I2S|ES8311|LCD_ST7789|ESP32S3_SPI2|ESPRESSIF)' nuttx/.config >> build.log || true
+          # Diagnostics for the run#32 link fixes (A: task_tls, B: nxmutex):
+          grep -E 'NOINLINE|TLS_TASK_NELEM' nuttx/.config >> build.log || true
+          for sym in CONFIG_AUDIO=y CONFIG_DRIVERS_AUDIO=y CONFIG_AUDIO_ES8311=y CONFIG_AUDIO_I2S=y CONFIG_I2C=y CONFIG_I2S=y CONFIG_ESP32S3_I2C0=y CONFIG_ESP32S3_I2C0_MASTER_MODE=y CONFIG_ESPRESSIF_I2C_PERIPH_MASTER_MODE=y CONFIG_ESP32S3_I2S=y CONFIG_ESP32S3_SPI2=y CONFIG_LCD_ST7789=y CONFIG_AI_VOX3_SERVO=y CONFIG_AI_VOX3_BUTTONS=y CONFIG_ESP32S3_LEDC=y CONFIG_ESP32S3_LEDC_TIM0=y CONFIG_ESP32S3_LEDC_TIM0_CHANNELS=1 CONFIG_ESP32S3_LEDC_CHANNEL0_PIN=42 CONFIG_ESP32S3_LEDC_CHANNEL1_PIN=43 CONFIG_ESP32S3_LEDC_CHANNEL2_PIN=44 CONFIG_ESP32S3_LEDC_CHANNEL3_PIN=48 CONFIG_ESP32S3_GPIO_IRQ=y CONFIG_TLS_TASK_NELEM=8; do
+            grep -qx "$sym" nuttx/.config || { echo "== CONFIG AUDIT FAILED: $sym not in .config ==" >> build.log; exit 1; }
+          done
+          # nxmutex link fix (run#31): the mutex impl must stay inline.
+          grep -qx '# CONFIG_LIBC_SEM_MUTEX_NOINLINE is not set' nuttx/.config || { echo "== CONFIG AUDIT FAILED: CONFIG_LIBC_SEM_MUTEX_NOINLINE must be off ==" >> build.log; exit 1; }
+          echo "CONFIG AUDIT OK" >> build.log
           # ------------------------------------------------------------------
           # Pre-seed esp-hal-3rdparty at the pinned commit and fix its lock
           # initializer BEFORE the build's own clone step (run#23/#24):

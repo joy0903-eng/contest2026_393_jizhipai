@@ -14,6 +14,18 @@ include $(TOPDIR)/Make.defs
 
 CSRCS = board.c
 
+# run#32 link fix: unconditional nxmutex symbol provider.  Some member
+# objects pulled into the link (es8311.o under drivers/audio) carry
+# extern references to nxmutex_init/lock/unlock even with
+# CONFIG_LIBC_SEM_MUTEX_NOINLINE off.  ai_vox3_mutex_shim.c re-includes
+# mutex.h/semaphore.h with the NOINLINE magic applied, emitting global
+# definitions into libboard.a; libboards links AFTER libdrivers in
+# tools/FlatLibs.mk NUTTXLIBS, so these resolve the references.  Safe:
+# with NOINLINE pinned off, libc.a's own noinline TU compiles empty
+# (no duplicate symbols) -- see the shim's header comment for the full
+# argument.
+CSRCS += ai_vox3_mutex_shim.c
+
 ifeq ($(CONFIG_LCD_ST7789),y)
 CSRCS += ai_vox3_lcd.c
 endif
