@@ -71,6 +71,23 @@ jobs:
             || echo "source \"${{ github.workspace }}/openvela/apps/examples/desktop_companion/Kconfig\"" >> openvela/apps/examples/Kconfig
           # Build registration ships as staging .../desktop_companion/Make.defs (official
           # per-example pattern; auto-included by apps/examples/Make.defs wildcard).
+          cp -r team_repo/staging/vendor_espressif/boards/esp32s3/common openvela/vendor/espressif/boards/esp32s3/common
+          # Vendor board-common must be REAL, not a stub (run#25/#26 root cause):
+          # tools/Config.mk assigns BOARD_COMMON_DIR = $(BOARD_DIR)/../common whenever
+          # that directory EXISTS (its else-branch has no CONFIG_ARCH_BOARD_COMMON
+          # check), and scripts/Make.defs (ARCHSCRIPT) plus tools/Unix.mk (board
+          # symlink) both dereference it.  With only the stub common/configs from
+          # run#18, both dereferences hit an empty shell -> "No rule to make target"
+          # for esp32s3_peripherals.ld AND libboard.a.  The .ld scripts are copied
+          # from the in-tree nuttx so they always match the nuttx being built.
+          mkdir -p openvela/vendor/espressif/boards/esp32s3/common/scripts
+          for f in esp32s3_peripherals.ld esp32s3_rom_aliases.ld flat_memory.ld esp32s3_sections.ld; do
+            cp "openvela/nuttx/boards/xtensa/esp32s3/common/scripts/$f" \
+               "openvela/vendor/espressif/boards/esp32s3/common/scripts/$f" \
+               || { echo "== LDSCRIPT COPY FAILED: $f =="; exit 1; }
+          done
+          ls -la openvela/vendor/espressif/boards/esp32s3/common/scripts
+          # Keep the configs stub that configure's process_config.sh references.
           mkdir -p openvela/vendor/espressif/boards/esp32s3/common/configs
           echo "BSP+应用已就位"
           echo "--- apps/examples/Kconfig ---"

@@ -1,0 +1,12 @@
+############################################################################
+# vendor/espressif/boards/esp32s3/common/src/Make.defs
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Stub: the vendor board-common ships no generic C sources of its own.  This
+# file only exists so that common/Makefile's "include src/Make.defs" (the
+# in-tree delegate structure) does not fail.  Per-board sources come in via
+# board/Make.defs (-> ai_vox3/src/Make.defs through the board/board symlink).
+############################################################################
+
+# No CSRCS: the vendor board-common has no generic sources.

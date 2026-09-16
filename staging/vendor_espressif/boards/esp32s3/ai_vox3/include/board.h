@@ -143,7 +143,13 @@
 /****************************************************************************
  * Public Function Prototypes — per-peripheral board initialization.
  * Implemented in src/ai_vox3_*.c. Called from src/board.c.
+ *
+ * Guarded with __ASSEMBLY__ (NuttX board-header convention): some arch .S
+ * files include <arch/board/board.h>, and the assembler cannot parse C
+ * declarations ("unknown opcode 'struct'" at run#26).
  ****************************************************************************/
+
+#ifndef __ASSEMBLY__
 
 #ifdef __cplusplus
 extern "C"
@@ -177,5 +183,7 @@ int  ai_vox3_sd_initialize(void);
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* __ASSEMBLY__ */
 
 #endif /* __BOARDS_ESP32S3_AI_VOX3_INCLUDE_BOARD_H */
