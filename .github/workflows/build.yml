@@ -63,12 +63,18 @@ jobs:
         run: |
           cp -r team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3 openvela/vendor/espressif/boards/esp32s3/ai_vox3
           cp -r team_repo/staging/apps/examples/desktop_companion openvela/apps/examples/desktop_companion
-          grep -q 'examples/desktop_companion/Kconfig' openvela/apps/examples/Kconfig \
-            || echo 'source "examples/desktop_companion/Kconfig"' >> openvela/apps/examples/Kconfig
-          grep -q 'CONFIG_EXAMPLES_DESKTOP_COMPANION' openvela/apps/examples/Make.defs \
-            || printf '\nifeq ($(CONFIG_EXAMPLES_DESKTOP_COMPANION),y)\n  CONFIGURED_APPS += $(APPDIR)/examples/desktop_companion\nendif\n' >> openvela/apps/examples/Make.defs
+          # Register the app Kconfig with an ABSOLUTE source path — mirrors mkkconfig.sh
+          # output exactly ("source \"<abs path>\": relative paths fail because $srctree
+          # is unset when olddefconfig parses the apps tree (run#19 root cause).
+          mkdir -p openvela/apps/examples
+          grep -q 'desktop_companion' openvela/apps/examples/Kconfig 2>/dev/null \
+            || echo "source \"${{ github.workspace }}/openvela/apps/examples/desktop_companion/Kconfig\"" >> openvela/apps/examples/Kconfig
+          # Build registration ships as staging .../desktop_companion/Make.defs (official
+          # per-example pattern; auto-included by apps/examples/Make.defs wildcard).
           mkdir -p openvela/vendor/espressif/boards/esp32s3/common/configs
           echo "BSP+应用已就位"
+          echo "--- apps/examples/Kconfig ---"
+          cat openvela/apps/examples/Kconfig
 
       - name: Build AI-VOX3 openvela config (official m() Makefile chain via VELA_USE_MAKEFILE=1)
         working-directory: openvela
