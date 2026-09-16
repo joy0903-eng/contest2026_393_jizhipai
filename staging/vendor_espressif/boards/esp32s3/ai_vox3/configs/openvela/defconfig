@@ -37,6 +37,23 @@ CONFIG_ESP32S3_SPIRAM=y
 CONFIG_ESP32S3_SPIRAM_MODE_OCT=y
 CONFIG_ESP32S3_SPIRAM_SPEED_80M=y
 
+# --- Boot format: LEGACY IDF bootloader (run#40/#41 root cause) --------------
+# Kconfig (arch/xtensa/src/esp32s3/Kconfig, verbatim): the hidden symbol
+# ESPRESSIF_SIMPLE_BOOT has `default y` whenever NEITHER app format is set,
+# and ESP32S3_APP_FORMAT_LEGACY defaults to `y if BUILD_PROTECTED` -- this is
+# a flat build, so LEGACY resolved to n and SIMPLE_BOOT to y.  Bootloader.mk
+# then took the empty-shell branch ("Using direct bootloader to boot
+# NuttX.") and `make bootloader` produced NO files at all (run#40/#41
+# binlist.txt forensics).  Pin LEGACY explicitly so `make bootloader` takes
+# the real branch: clone esp-nuttx-bootloader, run build_idfboot.sh
+# -c esp32s3 -s -f, and COPYFILE bootloader-esp32s3.bin +
+# partition-table-esp32s3.bin to TOPDIR (there is NO separate
+# partition_table target).  Side effects verified safe: Make.defs switches
+# to legacy_sections.ld (present in the copied common/scripts), the
+# partition table offset defaults to 0x8000, and no other Kconfig symbol
+# depends on SIMPLE_BOOT.
+CONFIG_ESP32S3_APP_FORMAT_LEGACY=y
+
 # SMP: ESP32-S3 is dual-core; matches the official esp32s3-eye defconfig.
 # (Attribution note: the esp-hal-3rdparty clk_ctrl_os.c "invalid initializer"
 # error was NOT caused by missing SMP -- OpenVela's spinlock_t is a struct in

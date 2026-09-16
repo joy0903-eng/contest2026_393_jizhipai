@@ -160,10 +160,10 @@ jobs:
             exit 1
           fi
           echo "== CONFIG AUDIT ==" >> build.log
-          grep -E '^CONFIG_(AUDIO|DRIVERS_AUDIO|I2C|I2S|ES8311|LCD_ST7789|ESP32S3_SPI2|ESPRESSIF)' nuttx/.config >> build.log || true
+          grep -E '^CONFIG_(AUDIO|DRIVERS_AUDIO|I2C|I2S|ES8311|LCD_ST7789|ESP32S3_SPI2|ESP32S3_APP_FORMAT|ESPRESSIF)' nuttx/.config >> build.log || true
           # Diagnostics for the run#32 link fixes (A: task_tls, B: nxmutex):
           grep -E 'NOINLINE|TLS_TASK_NELEM' nuttx/.config >> build.log || true
-          for sym in CONFIG_AUDIO=y CONFIG_DRIVERS_AUDIO=y CONFIG_AUDIO_ES8311=y CONFIG_AUDIO_I2S=y CONFIG_I2C=y CONFIG_I2S=y CONFIG_ESP32S3_I2C0=y CONFIG_ESP32S3_I2C0_MASTER_MODE=y CONFIG_ESPRESSIF_I2C_PERIPH_MASTER_MODE=y CONFIG_ESP32S3_I2S=y CONFIG_ESP32S3_SPI2=y CONFIG_LCD_ST7789=y CONFIG_AI_VOX3_SERVO=y CONFIG_AI_VOX3_BUTTONS=y CONFIG_ESP32S3_LEDC=y CONFIG_ESP32S3_LEDC_TIM0=y CONFIG_ESP32S3_LEDC_TIM0_CHANNELS=1 CONFIG_ESP32S3_LEDC_CHANNEL0_PIN=42 CONFIG_ESP32S3_LEDC_CHANNEL1_PIN=43 CONFIG_ESP32S3_LEDC_CHANNEL2_PIN=44 CONFIG_ESP32S3_LEDC_CHANNEL3_PIN=48 CONFIG_ESP32S3_GPIO_IRQ=y CONFIG_TLS_TASK_NELEM=8; do
+          for sym in CONFIG_AUDIO=y CONFIG_DRIVERS_AUDIO=y CONFIG_AUDIO_ES8311=y CONFIG_AUDIO_I2S=y CONFIG_I2C=y CONFIG_I2S=y CONFIG_ESP32S3_I2C0=y CONFIG_ESP32S3_I2C0_MASTER_MODE=y CONFIG_ESPRESSIF_I2C_PERIPH_MASTER_MODE=y CONFIG_ESP32S3_I2S=y CONFIG_ESP32S3_SPI2=y CONFIG_LCD_ST7789=y CONFIG_AI_VOX3_SERVO=y CONFIG_AI_VOX3_BUTTONS=y CONFIG_ESP32S3_LEDC=y CONFIG_ESP32S3_LEDC_TIM0=y CONFIG_ESP32S3_LEDC_TIM0_CHANNELS=1 CONFIG_ESP32S3_LEDC_CHANNEL0_PIN=42 CONFIG_ESP32S3_LEDC_CHANNEL1_PIN=43 CONFIG_ESP32S3_LEDC_CHANNEL2_PIN=44 CONFIG_ESP32S3_LEDC_CHANNEL3_PIN=48 CONFIG_ESP32S3_GPIO_IRQ=y CONFIG_TLS_TASK_NELEM=8 CONFIG_ESP32S3_APP_FORMAT_LEGACY=y; do
             grep -qx "$sym" nuttx/.config || { echo "== CONFIG AUDIT FAILED: $sym not in .config ==" >> build.log; exit 1; }
           done
           # nxmutex link fix (run#31): the mutex impl must stay inline.
@@ -235,22 +235,28 @@ jobs:
           echo "M-CHAIN rc=$rc" >> build.log
           ls -la nuttx/nuttx nuttx/nuttx.bin 2>/dev/null || true
           # ------------------------------------------------------------------
-          # BOOTLOADER + PARTITION TABLE (run#40 binlist forensics): the
-          # esp32s3 build tree contains NO bootloader.bin / partition-table.bin
-          # after plain `m` -- they are separate make targets.  Build them
-          # here.  Tolerant on purpose: dump the matching target names from
-          # `make help` first so a renamed target is diagnosable from the
-          # log, then try the canonical names.
+          # BOOTLOADER + PARTITION TABLE (run#42, root cause nailed verbatim
+          # from Bootloader.mk + Kconfig): the defconfig now pins
+          # CONFIG_ESP32S3_APP_FORMAT_LEGACY=y.  Before that, the hidden
+          # ESPRESSIF_SIMPLE_BOOT defaulted to y (LEGACY defaults to
+          # `y if BUILD_PROTECTED`, and this is a flat build), so the
+          # `bootloader` target was the empty-shell branch ("Using direct
+          # bootloader to boot NuttX.") and produced NOTHING -- the
+          # run#40/#41 binlist forensics.  The LEGACY branch clones
+          # esp-nuttx-bootloader, runs build_idfboot.sh -c esp32s3 -s -f
+          # (inits the esp-idf submodule, cmake-builds the IDF 2nd-stage
+          # bootloader with the xtensa toolchain already in PATH, then
+          # gen_esp32part for the table) and COPYFILEs BOTH products to
+          # TOPDIR.  There is NO separate partition_table target.
           # ------------------------------------------------------------------
           {
-            echo "== bootloader/partition targets in `make help`: =="
-            make -C nuttx help 2>&1 | grep -iE 'bootloader|partition' || echo "(no matching help entries)"
+            echo "== boot format in .config: =="
+            grep -E 'APP_FORMAT|SIMPLE_BOOT|PARTITION_TABLE_OFFSET|FLASH_(16M|MODE|FREQ)' nuttx/.config || true
             echo "== make -C nuttx bootloader =="
-            make -C nuttx bootloader 2>&1 | tail -8 || true
-            echo "== make -C nuttx partition_table =="
-            make -C nuttx partition_table 2>&1 | tail -8 || true
+            make -C nuttx bootloader 2>&1 || echo "== BOOTLOADER MAKE FAILED (full output above) =="
+            echo "== bootloader products in nuttx/: =="
+            ls -la nuttx/bootloader-esp32s3.bin nuttx/partition-table-esp32s3.bin 2>&1 || true
           } >> build.log 2>&1
-          find nuttx -name '*.bin' 2>/dev/null | grep -iE 'bootloader|partition' >> build.log || echo "(still no bootloader/partition .bin)" >> build.log
 
       - name: Collect firmware (merge if needed)
         if: always()
@@ -263,16 +269,24 @@ jobs:
           # (binlist.txt ships in the firmware branch as forensics).
           find nuttx -name '*.bin' -exec ls -la {} \; > binlist.txt 2>&1 || true
           tail -c 3000 binlist.txt || true
-          find nuttx -name 'nuttx.bin'          -exec cp -v {} firmware/ \; 2>/dev/null || true
-          find nuttx -name 'bootloader*.bin'    -exec cp -v {} firmware/ \; 2>/dev/null || true
-          find nuttx -name 'partition*.bin'     -exec cp -v {} firmware/ \; 2>/dev/null || true
-          find nuttx -name 'nuttx.merged.bin'   -exec cp -v {} firmware/ \; 2>/dev/null || true
+          find nuttx -name 'nuttx.bin'                   -exec cp -v {} firmware/ \; 2>/dev/null || true
+          find nuttx -name 'bootloader-esp32s3.bin'      -exec cp -v {} firmware/ \; 2>/dev/null || true
+          find nuttx -name 'partition-table-esp32s3.bin' -exec cp -v {} firmware/ \; 2>/dev/null || true
+          find nuttx -name 'bootloader*.bin'             -exec cp -v {} firmware/ \; 2>/dev/null || true
+          find nuttx -name 'partition*.bin'              -exec cp -v {} firmware/ \; 2>/dev/null || true
+          find nuttx -name 'mcuboot*.bin'                -exec cp -v {} firmware/ \; 2>/dev/null || true
+          find nuttx -name 'nuttx.merged.bin'            -exec cp -v {} firmware/ \; 2>/dev/null || true
           cp -v binlist.txt firmware/ 2>/dev/null || true
+          # run#41 forensics gap: the Publish step runs only on success and
+          # the logs branch only on failure, so the bootloader make output
+          # was invisible on success.  Ship the build.log tail WITH the
+          # firmware itself (Collect runs `if: always()`).
+          tail -c 3000000 build.log > firmware/build_tail.log 2>/dev/null || true
           ls -la firmware || true
-          if [ ! -f firmware/nuttx.merged.bin ] && [ -f firmware/bootloader.bin ] && [ -f firmware/partition-table.bin ] && [ -f firmware/nuttx.bin ]; then
+          if [ ! -f firmware/nuttx.merged.bin ] && [ -f firmware/bootloader-esp32s3.bin ] && [ -f firmware/partition-table-esp32s3.bin ] && [ -f firmware/nuttx.bin ]; then
             python3 -m esptool --chip esp32s3 merge_bin -o firmware/nuttx.merged.bin \
               --flash-mode dio --flash-freq keep --flash-size keep \
-              0x0 firmware/bootloader.bin 0x8000 firmware/partition-table.bin 0x10000 firmware/nuttx.bin
+              0x0 firmware/bootloader-esp32s3.bin 0x8000 firmware/partition-table-esp32s3.bin 0x10000 firmware/nuttx.bin
           fi
           ls -la firmware || true
 
