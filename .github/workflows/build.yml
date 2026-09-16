@@ -234,6 +234,23 @@ jobs:
           rc=$?
           echo "M-CHAIN rc=$rc" >> build.log
           ls -la nuttx/nuttx nuttx/nuttx.bin 2>/dev/null || true
+          # ------------------------------------------------------------------
+          # BOOTLOADER + PARTITION TABLE (run#40 binlist forensics): the
+          # esp32s3 build tree contains NO bootloader.bin / partition-table.bin
+          # after plain `m` -- they are separate make targets.  Build them
+          # here.  Tolerant on purpose: dump the matching target names from
+          # `make help` first so a renamed target is diagnosable from the
+          # log, then try the canonical names.
+          # ------------------------------------------------------------------
+          {
+            echo "== bootloader/partition targets in `make help`: =="
+            make -C nuttx help 2>&1 | grep -iE 'bootloader|partition' || echo "(no matching help entries)"
+            echo "== make -C nuttx bootloader =="
+            make -C nuttx bootloader 2>&1 | tail -8 || true
+            echo "== make -C nuttx partition_table =="
+            make -C nuttx partition_table 2>&1 | tail -8 || true
+          } >> build.log 2>&1
+          find nuttx -name '*.bin' 2>/dev/null | grep -iE 'bootloader|partition' >> build.log || echo "(still no bootloader/partition .bin)" >> build.log
 
       - name: Collect firmware (merge if needed)
         if: always()
