@@ -32,7 +32,7 @@ jobs:
           sudo chmod a+x /usr/local/bin/repo
           test -s /usr/local/bin/repo || { echo "repo 下载失败"; exit 1; }
           repo --version
-          pip install --quiet esptool
+          pip install --quiet --upgrade "esptool>=4.8.0"
           git config --global user.email "ci@openvela-contest.local"
           git config --global user.name "OpenVela Contest CI"
           git config --global http.postBuffer 524288000
@@ -176,6 +176,24 @@ jobs:
             grep -n "define LOCK_INITIALIZER_UNLOCKED" "$HALDIR/components/esp_hw_support/clk_ctrl_os.c"
           } >> build.log 2>&1 || { echo "== HAL PRESEED FAILED ==" >> build.log; exit 1; }
           echo "HAL PRESEED OK" >> build.log
+          # ------------------------------------------------------------------
+          # ESPTOOL VERSION GATE (run#35): the build reached MKIMAGE
+          # ("MKIMAGE: ESP32-S3 binary") and died with
+          #   "Unsupported esptool version: 4.7.0 expects >= 4.8.0"
+          # even though the deps step installed esptool — something inside
+          # the provisioning chain pins or shadows it.  Upgrade at the last
+          # moment before `m` so nothing can downgrade it in between, and
+          # record the exact version the build will see.
+          # ------------------------------------------------------------------
+          {
+            python3 -m pip install --quiet --upgrade "esptool>=4.8.0" \
+              || pip install --quiet --upgrade "esptool>=4.8.0" \
+              || { echo "== ESPTOOL UPGRADE FAILED =="; exit 1; }
+            echo "== esptool version seen by the build: =="
+            python3 -m esptool version || esptool.py version || true
+            which esptool.py || true
+          } >> build.log 2>&1 || { echo "== ESPTOOL PREP FAILED ==" >> build.log; exit 1; }
+          echo "ESPTOOL OK" >> build.log
           export VELA_USE_MAKEFILE=1
           # Override the envsetup default (which appends -Werror): the official
           # esp32s3 chip layer (esp32s3_libc_stubs.c 'noreturn' warning) does not
