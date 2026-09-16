@@ -264,9 +264,18 @@ jobs:
             # (/usr/bin/python == python3 via python-is-python3; pip
             # defaults to --user here, run#38 forensics).
             echo "== ensure idf_component_manager =="
-            { python3 -m pip install --user idf-component-manager \
-                || python3 -m pip install idf-component-manager \
-                || python3 -m pip install --user --break-system-packages idf-component-manager; } \
+            # --upgrade-strategy eager: upgrade ALL deps to their latest into
+            # the user site.  The runner's /usr/lib/python3/dist-packages
+            # carries stale versions (pyparsing 2.4.7, requests 2.25.1,
+            # click 8.0.3, ...) and pip's default "only-if-needed" strategy
+            # treats them as satisfied, so every unversioned dep had to be
+            # re-fixed by hand: run#43 = OpAssoc (pyparsing), run#44 =
+            # JSONDecodeError (requests.exceptions, requests>=2.27).  eager
+            # installs the whole tree fresh into ~/.local, which precedes
+            # dist-packages on sys.path -- one shot instead of whack-a-mole.
+            { python3 -m pip install --user --upgrade --upgrade-strategy eager idf-component-manager \
+                || python3 -m pip install --upgrade --upgrade-strategy eager idf-component-manager \
+                || python3 -m pip install --user --break-system-packages --upgrade --upgrade-strategy eager idf-component-manager; } \
               || { echo "== IDF-COMPONENT-MANAGER INSTALL FAILED =="; exit 1; }
             # run#43: pip found the system pyparsing 2.4.7 in
             # /usr/lib/python3/dist-packages and treated the (unversioned)
