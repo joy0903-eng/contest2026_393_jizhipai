@@ -143,6 +143,37 @@ CONFIG_SYSTEM_WPA_NAMES=y
 CONFIG_NSH_NETINIT=y
 CONFIG_NSH_NETINIT_WAPI=y
 
+# --- Servo: LEDC PWM, one timer + one channel per servo ---------------------
+# Servo id i -> timer i -> channel i; GPIOs routed by the chip driver from
+# the CHANNELx_PIN values (42/43/44/48 = board.h BOARD_SERVO0..3_GPIO).
+CONFIG_AI_VOX3_SERVO=y
+CONFIG_ESP32S3_LEDC=y
+CONFIG_ESP32S3_LEDC_TIM0=y
+CONFIG_ESP32S3_LEDC_TIM0_CHANNELS=1
+CONFIG_ESP32S3_LEDC_TIM1=y
+CONFIG_ESP32S3_LEDC_TIM1_CHANNELS=1
+CONFIG_ESP32S3_LEDC_TIM2=y
+CONFIG_ESP32S3_LEDC_TIM2_CHANNELS=1
+CONFIG_ESP32S3_LEDC_TIM3=y
+CONFIG_ESP32S3_LEDC_TIM3_CHANNELS=1
+CONFIG_ESP32S3_LEDC_CHANNEL0_PIN=42
+CONFIG_ESP32S3_LEDC_CHANNEL1_PIN=43
+CONFIG_ESP32S3_LEDC_CHANNEL2_PIN=44
+CONFIG_ESP32S3_LEDC_CHANNEL3_PIN=48
+
+# --- Buttons: GPIO interrupts -----------------------------------------------
+CONFIG_AI_VOX3_BUTTONS=y
+CONFIG_ESP32S3_GPIO_IRQ=y
+
+# --- Force nxmutex inline path (run#31 link fix) -----------------------------
+# include/nuttx/mutex.h: with CONFIG_LIBC_SEM_MUTEX_NOINLINE=y every
+# nxmutex_* call compiles to an extern reference whose implementation lives
+# in libcc.a -- run#31 showed es8311.o (libdrivers.a) failing to resolve it
+# at link time.  With the symbol off the whole tree uses the self-contained
+# static-inline path in the header and the reference disappears.
+# This symbol defaults to DEFAULT_SMALL, so it MUST be pinned off here.
+# CONFIG_LIBC_SEM_MUTEX_NOINLINE is not set
+
 # --- Application: desktop_companion ------------------------------------------
 CONFIG_BUILTIN=y
 CONFIG_EXAMPLES_DESKTOP_COMPANION=y

@@ -113,9 +113,11 @@ jobs:
           if [ -f nuttx/.config ]; then
             echo "== CONFIG AUDIT ==" >> build.log
             grep -E '^CONFIG_(AUDIO|DRIVERS_AUDIO|I2C|I2S|ES8311|LCD_ST7789|ESP32S3_SPI2|ESPRESSIF)' nuttx/.config >> build.log || true
-            for sym in CONFIG_AUDIO=y CONFIG_DRIVERS_AUDIO=y CONFIG_AUDIO_ES8311=y CONFIG_AUDIO_I2S=y CONFIG_I2C=y CONFIG_I2S=y CONFIG_ESP32S3_I2C0=y CONFIG_ESP32S3_I2C0_MASTER_MODE=y CONFIG_ESPRESSIF_I2C_PERIPH_MASTER_MODE=y CONFIG_ESP32S3_I2S=y CONFIG_ESP32S3_SPI2=y CONFIG_LCD_ST7789=y; do
+            for sym in CONFIG_AUDIO=y CONFIG_DRIVERS_AUDIO=y CONFIG_AUDIO_ES8311=y CONFIG_AUDIO_I2S=y CONFIG_I2C=y CONFIG_I2S=y CONFIG_ESP32S3_I2C0=y CONFIG_ESP32S3_I2C0_MASTER_MODE=y CONFIG_ESPRESSIF_I2C_PERIPH_MASTER_MODE=y CONFIG_ESP32S3_I2S=y CONFIG_ESP32S3_SPI2=y CONFIG_LCD_ST7789=y CONFIG_AI_VOX3_SERVO=y CONFIG_AI_VOX3_BUTTONS=y CONFIG_ESP32S3_LEDC=y CONFIG_ESP32S3_LEDC_TIM0=y CONFIG_ESP32S3_LEDC_TIM0_CHANNELS=1 CONFIG_ESP32S3_LEDC_CHANNEL0_PIN=42 CONFIG_ESP32S3_LEDC_CHANNEL1_PIN=43 CONFIG_ESP32S3_LEDC_CHANNEL2_PIN=44 CONFIG_ESP32S3_LEDC_CHANNEL3_PIN=48 CONFIG_ESP32S3_GPIO_IRQ=y; do
               grep -qx "$sym" nuttx/.config || { echo "== CONFIG AUDIT FAILED: $sym not in .config ==" >> build.log; exit 1; }
             done
+            # nxmutex link fix (run#31): the mutex impl must stay inline.
+            grep -qx '# CONFIG_LIBC_SEM_MUTEX_NOINLINE is not set' nuttx/.config || { echo "== CONFIG AUDIT FAILED: CONFIG_LIBC_SEM_MUTEX_NOINLINE must be off ==" >> build.log; exit 1; }
             echo "CONFIG AUDIT OK" >> build.log
           else
             echo "WARN: nuttx/.config not found after lunch; audit skipped" >> build.log

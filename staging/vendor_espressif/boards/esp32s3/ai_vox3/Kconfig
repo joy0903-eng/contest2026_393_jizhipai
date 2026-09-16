@@ -29,9 +29,12 @@ config AI_VOX3_WS2812
 
 config AI_VOX3_BUTTONS
 	bool "Enable on-board buttons (input GPIO) support"
+	depends on ESP32S3_GPIO_IRQ
 	default n
 	---help---
-		Requires CONFIG_INPUT_BUTTONS to be enabled in the defconfig.
+		Requires CONFIG_ESP32S3_GPIO_IRQ to be enabled in the defconfig.
+		(The buttons driver attaches its own GPIO ISRs via ESP32S3_PIN2IRQ
+		and does not use the generic INPUT_BUTTONS framework.)
 
 config AI_VOX3_LCD_MOSI
 	int "LCD MOSI (FSPI data) GPIO"

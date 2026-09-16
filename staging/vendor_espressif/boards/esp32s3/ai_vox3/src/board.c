@@ -30,6 +30,13 @@
 #include <sys/boardctl.h>
 #endif
 
+#ifdef CONFIG_ESP32S3_WIFI
+#include "esp32s3_wlan.h"
+#endif
+
+void esp32s3_board_initialize(void);
+void xtensa_netinitialize(void);
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
@@ -37,6 +44,45 @@
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: esp32s3_board_initialize
+ *
+ * Description:
+ *   Mandatory board hook called unconditionally by __esp32s3_start()
+ *   (arch/xtensa/src/esp32s3/esp32s3_start.c:423) before nx_start().
+ *   Follows the official esp32s3-eye / esp32s3-box pattern: an empty
+ *   function body.  Real peripheral bring-up happens later in
+ *   esp_board_initialize() below, where OS services are available.
+ *
+ ****************************************************************************/
+
+void esp32s3_board_initialize(void)
+{
+  /* Intentionally empty (official pattern). */
+}
+
+/****************************************************************************
+ * Name: xtensa_netinitialize
+ *
+ * Description:
+ *   Mandatory arch hook called by up_initialize()
+ *   (arch/xtensa/src/common/xtensa_initialize.c).  The prototype only
+ *   exists when CONFIG_NET=y && !CONFIG_NETDEV_LATEINIT
+ *   (arch/xtensa/src/common/xtensa.h); otherwise the call is #defined
+ *   away, so this definition is gated the same way.  The WLAN station
+ *   netdev is registered from esp_board_initialize() instead, which runs
+ *   through BOARDIOC_INIT before NSH performs its netinit.
+ *
+ ****************************************************************************/
+
+#if defined(CONFIG_NET) && !defined(CONFIG_NETDEV_LATEINIT)
+void xtensa_netinitialize(void)
+{
+  /* Intentionally empty: netdev registration happens in
+   * esp_board_initialize() via esp32s3_wlan_sta_initialize(). */
+}
+#endif
 
 /****************************************************************************
  * Name: esp_board_initialize
@@ -53,6 +99,18 @@
 int esp_board_initialize(void)
 {
   int ret = OK;
+
+#if defined(CONFIG_ESP32S3_WIFI) && defined(ESP32S3_WLAN_HAS_STA)
+  /* Register the WLAN station netdev.  BOARDIOC_INIT (NSH archinit)
+   * reaches here before the NSH network initialization, so the netdev
+   * exists by the time ifup runs.  ESP32S3_WLAN_HAS_STA is defined by
+   * esp32s3_wifi_adapter.h (pulled in through esp32s3_wlan.h). */
+  ret = esp32s3_wlan_sta_initialize();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: wlan sta init failed: %d\n", ret);
+    }
+#endif
 
 #ifdef CONFIG_LCD
   ret = ai_vox3_lcd_initialize();
