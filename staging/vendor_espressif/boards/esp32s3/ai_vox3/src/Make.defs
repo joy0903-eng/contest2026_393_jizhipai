@@ -1,0 +1,46 @@
+############################################################################
+# vendor/espressif/boards/esp32s3/ai_vox3/src/Make.defs
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Board source list for emakefun AI-VOX3 (ESP32-S3-R8).
+# Follows the OpenVela vendor-board convention (see esp32s3-eye):
+# sources are declared here; the unified board build template compiles
+# them into libboard.a.
+#
+############################################################################
+
+include $(TOPDIR)/Make.defs
+
+CSRCS = board.c
+
+ifeq ($(CONFIG_LCD_ST7789),y)
+CSRCS += ai_vox3_lcd.c
+endif
+
+ifeq ($(CONFIG_ESP32S3_I2S),y)
+CSRCS += ai_vox3_audio.c
+endif
+
+ifeq ($(CONFIG_AI_VOX3_SERVO),y)
+CSRCS += ai_vox3_servo.c
+endif
+
+ifeq ($(CONFIG_AI_VOX3_WS2812),y)
+CSRCS += ai_vox3_ws2812.c
+endif
+
+ifeq ($(CONFIG_AI_VOX3_BUTTONS),y)
+CSRCS += ai_vox3_buttons.c
+endif
+
+ifeq ($(CONFIG_MMCSD),y)
+CSRCS += ai_vox3_sd.c
+endif
+
+# Register the board source directory with the common build
+VPATH += :board
+CFLAGS += ${INCDIR_PREFIX}$(TOPDIR)$(DELIM)arch$(DELIM)$(CONFIG_ARCH)$(DELIM)src$(DELIM)board$(DELIM)board
+
+# Board-local headers ("board.h" lives in the board include/ directory)
+CFLAGS += ${INCDIR_PREFIX}$(BOARD_COMMON_DIR)$(DELIM)include

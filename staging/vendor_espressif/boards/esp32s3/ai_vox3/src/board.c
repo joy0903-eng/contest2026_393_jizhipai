@@ -68,23 +68,29 @@ int esp_board_initialize(void)
     }
 #endif
 
+#ifdef CONFIG_AI_VOX3_SERVO
   ret = ai_vox3_servo_initialize();
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: servo init failed: %d\n", ret);
     }
+#endif
 
+#ifdef CONFIG_AI_VOX3_WS2812
   ret = ai_vox3_ws2812_initialize();
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: ws2812 init failed: %d\n", ret);
     }
+#endif
 
+#ifdef CONFIG_AI_VOX3_BUTTONS
   ret = ai_vox3_buttons_initialize();
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: buttons init failed: %d\n", ret);
     }
+#endif
 
 #ifdef CONFIG_MMCSD
   ret = ai_vox3_sd_initialize();

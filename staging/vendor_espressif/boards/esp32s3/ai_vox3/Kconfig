@@ -1,15 +1,37 @@
 #
-# src/Kconfig — Board configuration menu for emakefun AI-VOX3 (ESP32-S3-R8)
+# Kconfig — Board configuration for emakefun AI-VOX3 (ESP32-S3-R8)
 #
-# Pin defaults mirror board.h / the porting plan appendix B. These can be
-# overridden in menuconfig. Ambiguous pins are marked with a comment.
+# Follows the OpenVela vendor-board convention (see esp32s3-eye):
+# board options are wrapped in `if ARCH_BOARD_CUSTOM` because vendor
+# boards are selected via ARCH_BOARD_CUSTOM + ARCH_BOARD_CUSTOM_DIR.
+#
+# Pin defaults mirror board.h / the porting plan appendix B. These can
+# be overridden in menuconfig.
 #
 
-if ARCH_BOARD_AI_VOX3
+if ARCH_BOARD_CUSTOM
 
 menu "AI-VOX3 Board Settings"
 
-comment "All default pin values are sourced from the AI-VOX3 knowledge base (§3)."
+comment "All default pin values are sourced from the AI-VOX3 knowledge base."
+
+config AI_VOX3_SERVO
+	bool "Enable servo (LEDC PWM) support"
+	default n
+	---help---
+		Requires CONFIG_ESP32S3_LEDC to be enabled in the defconfig.
+
+config AI_VOX3_WS2812
+	bool "Enable WS2812 RGB LED (RMT) support"
+	default n
+	---help---
+		Requires CONFIG_ESP32S3_RMT to be enabled in the defconfig.
+
+config AI_VOX3_BUTTONS
+	bool "Enable on-board buttons (input GPIO) support"
+	default n
+	---help---
+		Requires CONFIG_INPUT_BUTTONS to be enabled in the defconfig.
 
 config AI_VOX3_LCD_MOSI
 	int "LCD MOSI (FSPI data) GPIO"
@@ -34,7 +56,6 @@ config AI_VOX3_LCD_BL
 config AI_VOX3_LCD_RST
 	int "LCD reset GPIO (-1 if not connected)"
 	default -1
-	# TODO(real-device): AI-VOX3 has no LCD reset pin.
 
 config AI_VOX3_ES8311_I2C_SCL
 	int "ES8311 I2C SCL GPIO"
@@ -46,7 +67,7 @@ config AI_VOX3_ES8311_I2C_SDA
 
 config AI_VOX3_ES8311_I2C_ADDR
 	int "ES8311 I2C address"
-	default 0x18
+	default 24
 
 config AI_VOX3_I2S_MCLK
 	int "I2S MCLK GPIO"
@@ -56,21 +77,20 @@ config AI_VOX3_I2S_BCLK
 	int "I2S BCLK GPIO"
 	default 10
 
-# TODO(real-device): the three I2S data pins are documented inconsistently.
 config AI_VOX3_I2S_WS
-	int "I2S WS/LRCK GPIO (9 or 8 — verify on HW)"
+	int "I2S WS/LRCK GPIO"
 	default 9
 
 config AI_VOX3_I2S_DOUT
-	int "I2S DOUT/ASDOUT GPIO (8 or 7 — verify on HW)"
+	int "I2S DOUT/ASDOUT GPIO"
 	default 8
 
 config AI_VOX3_I2S_DIN
-	int "I2S DIN/DSDIN GPIO (7 or 9 — verify on HW)"
+	int "I2S DIN/DSDIN GPIO"
 	default 7
 
 config AI_VOX3_SERVO0_GPIO
-	int "Servo 0 GPIO"
+	int "Servo 0 (PAN/TILT) GPIO"
 	default 42
 
 config AI_VOX3_SERVO1_GPIO
@@ -86,7 +106,7 @@ config AI_VOX3_SERVO3_GPIO
 	default 48
 
 config AI_VOX3_WS2812_GPIO
-	int "WS2812 GPIO"
+	int "WS2812 RGB LED GPIO"
 	default 41
 
 config AI_VOX3_SD_CMD_GPIO
@@ -116,8 +136,7 @@ config AI_VOX3_BTN_BOOT_GPIO
 config AI_VOX3_BAT_ADC_GPIO
 	int "Battery ADC GPIO"
 	default 18
-	# TODO(real-device): calibrate divider ratio / mV-per-LSB.
 
 endmenu
 
-endif
+endif # ARCH_BOARD_CUSTOM
