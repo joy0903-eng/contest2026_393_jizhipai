@@ -73,6 +73,16 @@ CONFIG_EXAMPLES_FB=y
 
 # --- Audio: ES8311 + I2S -----------------------------------------------------
 CONFIG_AUDIO=y
+# drivers/audio/Kconfig nests EVERY codec driver (incl. AUDIO_ES8311 and
+# AUDIO_I2S) inside "if DRIVERS_AUDIO".  Without this umbrella symbol
+# olddefconfig silently drops AUDIO_ES8311/AUDIO_I2S and es8311.h compiles
+# empty -> run#29 "g_es8311_lower has initializer but incomplete type".
+CONFIG_DRIVERS_AUDIO=y
+# es8311.h #errors without the GENERIC I2C/I2S frameworks (the chip-level
+# ESP32S3_I2C/ESP32S3_I2S symbols do not satisfy these checks):
+#   CONFIG_AUDIO + CONFIG_I2S + CONFIG_I2C + CONFIG_SCHED_WORKQUEUE.
+CONFIG_I2C=y
+CONFIG_I2S=y
 CONFIG_AUDIO_I2S=y
 CONFIG_ESP32S3_I2S=y
 # TODO(real-device): verify I2S WS/DOUT/DIN pins on real HW (see src/ai_vox3_audio.c).
@@ -95,6 +105,11 @@ CONFIG_ESP32S3_I2C=y
 CONFIG_ESP32S3_I2C0=y
 CONFIG_ESP32S3_I2C0_SCLPIN=12
 CONFIG_ESP32S3_I2C0_SDAPIN=13
+# ESPRESSIF_I2C_PERIPH_MASTER_MODE is a HIDDEN bool gated by
+# (ESP32S3_I2C0_MASTER_MODE || ESP32S3_I2C1_MASTER_MODE) in the arch
+# Kconfig -- a defconfig line for the hidden symbol alone is unreliable.
+# The user-facing gate is the per-port master-mode switch:
+CONFIG_ESP32S3_I2C0_MASTER_MODE=y
 CONFIG_ESP32S3_I2C_PERIPH_MASTER_MODE=y
 
 # ES8311 codec driver.  include/nuttx/audio/es8311.h hides every prototype
