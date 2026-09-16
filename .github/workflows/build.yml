@@ -268,7 +268,23 @@ jobs:
                 || python3 -m pip install idf-component-manager \
                 || python3 -m pip install --user --break-system-packages idf-component-manager; } \
               || { echo "== IDF-COMPONENT-MANAGER INSTALL FAILED =="; exit 1; }
-            python3 -c "import idf_component_manager, sys; print('idf_component_manager OK on', sys.executable)" \
+            # run#43: pip found the system pyparsing 2.4.7 in
+            # /usr/lib/python3/dist-packages and treated the (unversioned)
+            # dependency as satisfied, so it never installed a newer one;
+            # the real CLI entry then died on a pyparsing 3.x-only API:
+            #   ImportError: cannot import name 'OpAssoc' from 'pyparsing'
+            # Force-upgrade pyparsing into the user site (which precedes
+            # dist-packages on sys.path).
+            { python3 -m pip install --user --upgrade "pyparsing>=3.0" \
+                || python3 -m pip install --user --break-system-packages --upgrade "pyparsing>=3.0"; } \
+              || { echo "== PYPARSING INSTALL FAILED =="; exit 1; }
+            # Deep import check (run#43 lesson): idf_component_manager's
+            # __init__ is lazy -- the shallow `import idf_component_manager`
+            # check passed while the actual entry died at
+            # core.py:59 -> idf_component_tools.manifest -> ... ->
+            # if_parser -> pyparsing.  Importing .core walks that whole
+            # chain and catches any other shadowed/missing dep.
+            python3 -c "import idf_component_manager.core, sys; print('idf_component_manager.core OK on', sys.executable)" \
               || { echo "== IDF-COMPONENT-MANAGER IMPORT FAILED =="; exit 1; }
             echo "== make -C nuttx bootloader =="
             make -C nuttx bootloader 2>&1 || echo "== BOOTLOADER MAKE FAILED (full output above) =="
