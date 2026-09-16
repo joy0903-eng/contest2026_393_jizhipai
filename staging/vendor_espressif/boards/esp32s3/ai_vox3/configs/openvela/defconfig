@@ -7,6 +7,11 @@
 # (the AI-VOX3 desktop companion application under apps/examples/desktop_companion).
 # =============================================================================
 
+# CONFIG_ARCH_XTENSA=y is the MANDATORY choice-entry symbol (matches official
+# esp32s3-eye defconfig). CONFIG_ARCH="xtensa" alone is a derived string and is
+# IGNORED by olddefconfig -> without the choice entry the arch falls back to
+# arm/stm32 and the build dies with "gcc: unrecognized -mlongcalls" (run#20).
+CONFIG_ARCH_XTENSA=y
 CONFIG_ARCH="xtensa"
 CONFIG_ARCH_CHIP="esp32s3"
 CONFIG_ARCH_CHIP_ESP32S3=y
