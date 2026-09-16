@@ -33,7 +33,24 @@ jobs:
           sudo chmod a+x /usr/local/bin/repo
           test -s /usr/local/bin/repo || { echo "repo 下载失败"; exit 1; }
           repo --version
-          pip install --quiet --upgrade "esptool>=4.8.0"
+          # ESPTOOL (run#36/#37 forensics): the runner PRE-INSTALLS esptool
+          # 4.7.0, so the old bare `pip install esptool` was a successful
+          # no-op and the build kept using 4.7.0 (run#35 MKIMAGE death).
+          # The first real install attempt with ">=4.8.0" failed the deps
+          # step twice in a row -- PEP 668 or a resolver conflict with the
+          # newest (5.x) esptool are the suspects.  Try four escalating
+          # variants, keep the full pip transcript, and fail loud only if
+          # every variant fails.
+          { pip install --upgrade "esptool>=4.8.0" \
+              || pip install --user --upgrade "esptool>=4.8.0" \
+              || pip install --break-system-packages --upgrade "esptool>=4.8.0" \
+              || pip install --user --upgrade "esptool==4.9.*" \
+              || { echo "== ALL ESPTOOL INSTALL VARIANTS FAILED =="; exit 1; }; } > pip_esptool.log 2>&1 \
+            || { echo "== ESPTOOL INSTALL FAILED, transcript: =="; cat pip_esptool.log; exit 1; }
+          { echo "== esptool as the build will see it: ==";
+            python3 -m esptool version || true;
+            python3 -c "import esptool; print('module:', esptool.__file__, esptool.__version__)" || true;
+            which esptool.py || true; } 2>&1
           git config --global user.email "ci@openvela-contest.local"
           git config --global user.name "OpenVela Contest CI"
           git config --global http.postBuffer 524288000
@@ -260,6 +277,7 @@ jobs:
           mkdir -p /tmp/pub && cd /tmp/pub
           git init -q -b logs .
           cp "${{ github.workspace }}/step_outcomes.txt" .
+          cp "${{ github.workspace }}/pip_esptool.log" . 2>/dev/null || true
           cp "${{ github.workspace }}/build_tail.log" .
           cp "${{ github.workspace }}/sync_tail.log" . 2>/dev/null || true
           cp "${{ github.workspace }}/init_tail.log" . 2>/dev/null || true
