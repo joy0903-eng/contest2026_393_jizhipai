@@ -310,6 +310,20 @@ jobs:
             # 0 default from __build_init; no managed components involved).
             export IDF_COMPONENT_MANAGER=0
             echo "IDF_COMPONENT_MANAGER=$IDF_COMPONENT_MANAGER"
+            # run#46: with the component manager skipped, the next gate is
+            # sdkconfig generation -- kconfig.cmake:176 invokes
+            #   python -m kconfgen --kconfig <IDF>/Kconfig ...
+            # and died with "/usr/bin/python: No module named kconfgen".
+            # esp-idf ships kconfgen.py (plus confgen.py etc.) inside
+            # <IDF>/tools; its export.sh normally puts that directory on
+            # PYTHONPATH, but Bootloader.mk runs make directly and never
+            # sources it.  The submodule is cloned by the bootloader target
+            # itself -- a PYTHONPATH entry pointing at a not-yet-existing
+            # directory is fine: it is only dereferenced when cmake runs
+            # kconfgen, after the clone.  (kconfiglib is already installed
+            # in the build step.)
+            export PYTHONPATH="$PWD/nuttx/arch/xtensa/src/esp32s3/bootloader/esp-nuttx-bootloader/esp-idf/tools:$PYTHONPATH"
+            echo "PYTHONPATH=$PYTHONPATH"
             echo "== make -C nuttx bootloader =="
             make -C nuttx bootloader 2>&1 || echo "== BOOTLOADER MAKE FAILED (full output above) =="
             echo "== bootloader products in nuttx/: =="
