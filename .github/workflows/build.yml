@@ -310,20 +310,40 @@ jobs:
             # 0 default from __build_init; no managed components involved).
             export IDF_COMPONENT_MANAGER=0
             echo "IDF_COMPONENT_MANAGER=$IDF_COMPONENT_MANAGER"
-            # run#46: with the component manager skipped, the next gate is
-            # sdkconfig generation -- kconfig.cmake:176 invokes
+            # run#46/#47: with the component manager skipped, the next gate
+            # is sdkconfig generation -- kconfig.cmake invokes
             #   python -m kconfgen --kconfig <IDF>/Kconfig ...
             # and died with "/usr/bin/python: No module named kconfgen".
-            # esp-idf ships kconfgen.py (plus confgen.py etc.) inside
-            # <IDF>/tools; its export.sh normally puts that directory on
-            # PYTHONPATH, but Bootloader.mk runs make directly and never
-            # sources it.  The submodule is cloned by the bootloader target
-            # itself -- a PYTHONPATH entry pointing at a not-yet-existing
-            # directory is fine: it is only dereferenced when cmake runs
-            # kconfgen, after the clone.  (kconfiglib is already installed
-            # in the build step.)
-            export PYTHONPATH="$PWD/nuttx/arch/xtensa/src/esp32s3/bootloader/esp-nuttx-bootloader/esp-idf/tools:$PYTHONPATH"
-            echo "PYTHONPATH=$PYTHONPATH"
+            # run#47 forensics settled WHERE kconfgen comes from at this
+            # esp-idf commit (1559b63, 2023-03-13):
+            #   - tools/kconfgen.py             -> 404 (not in tree)
+            #   - tools/kconfig_new/kconfgen.py -> 404 (not in tree either)
+            #   - tools/kconfig_new/confgen.py (260B) is a pure shim:
+            #       sys.exit(subprocess.run([sys.executable, '-m', 'kconfgen'] + sys.argv[1:]))
+            #   - kconfig.cmake sets NO PYTHONPATH: kconfgen_basecommand is
+            #     a bare `${python} -m kconfgen`, i.e. kconfgen must be an
+            #     INSTALLED module of the python env.
+            # The provider is the pip package `esp-idf-kconfig`, listed in
+            # tools/requirements/requirements.core.txt (same file as
+            # idf-component-manager).  A normal IDF setup installs it via
+            # install.py -- which Bootloader.mk never runs, so it was
+            # missing.  The run#46 PYTHONPATH export pointed at <IDF>/tools
+            # and was useless; it is gone now.
+            # Pin ==1.1.0: the version current when this esp-idf master
+            # snapshot was cut (1.2.0 only landed 2023-07).  1.x is a
+            # kconfiglib wrapper with a minimal dep tree (kconfiglib is
+            # already installed in this step); 3.x pulls textual/esp-pylib
+            # and its top-level module layout could not be verified from
+            # PyPI metadata -- not worth the risk.
+            { python3 -m pip install --user "esp-idf-kconfig==1.1.0" \
+                || python3 -m pip install "esp-idf-kconfig==1.1.0" \
+                || python3 -m pip install --user --break-system-packages "esp-idf-kconfig==1.1.0" \
+                || python3 -m pip install --user esp-idf-kconfig; } \
+              || { echo "== ESP-IDF-KCONFIG INSTALL FAILED =="; exit 1; }
+            # Deep check (run#43 lesson): verify the EXACT module name the
+            # cmake will invoke, before spending 15 minutes in make.
+            python3 -c "import kconfgen, sys; print('kconfgen OK on', sys.executable, kconfgen.__file__)" \
+              || { echo "== KCONFGEN IMPORT FAILED =="; exit 1; }
             echo "== make -C nuttx bootloader =="
             make -C nuttx bootloader 2>&1 || echo "== BOOTLOADER MAKE FAILED (full output above) =="
             echo "== bootloader products in nuttx/: =="
