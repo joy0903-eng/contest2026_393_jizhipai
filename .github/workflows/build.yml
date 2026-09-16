@@ -207,14 +207,18 @@ jobs:
           # ("MKIMAGE: ESP32-S3 binary") and died with
           #   "Unsupported esptool version: 4.7.0 expects >= 4.8.0"
           # even though the deps step installed esptool — something inside
-          # the provisioning chain pins or shadows it.  Upgrade at the last
+          # the provisioning chain pins or shadows it.  Install at the last
           # moment before `m` so nothing can downgrade it in between, and
           # record the exact version the build will see.
+          # run#42 addendum: ">= 4.8.0" resolved to esptool 5.4.0 once the
+          # deps step had upgraded pip.  MKIMAGE survived 5.x, but esptool 5
+          # renamed commands (merge_bin -> merge-bin) and the Collect-step
+          # merge uses the 4.x spelling -- pin ==4.8.1 exactly.
           # ------------------------------------------------------------------
           {
-            python3 -m pip install --quiet --upgrade "esptool>=4.8.0" \
-              || pip install --quiet --upgrade "esptool>=4.8.0" \
-              || { echo "== ESPTOOL UPGRADE FAILED =="; exit 1; }
+            python3 -m pip install --quiet --upgrade "esptool==4.8.1" \
+              || pip install --quiet --upgrade "esptool==4.8.1" \
+              || { echo "== ESPTOOL INSTALL FAILED =="; exit 1; }
             echo "== esptool version seen by the build: =="
             python3 -m esptool version || esptool.py version || true
             which esptool.py || true
@@ -252,6 +256,20 @@ jobs:
           {
             echo "== boot format in .config: =="
             grep -E 'APP_FORMAT|SIMPLE_BOOT|PARTITION_TABLE_OFFSET|FLASH_(16M|MODE|FREQ)' nuttx/.config || true
+            # run#42: the IDF bootloader cmake died at build.cmake:542 with
+            #   ModuleNotFoundError: No module named 'idf_component_manager'
+            # build_idfboot.sh passes -DPYTHON_DEPS_CHECKED=1, which only
+            # SKIPS the dependency check -- it installs nothing.  Install
+            # it up front into the same interpreter cmake uses
+            # (/usr/bin/python == python3 via python-is-python3; pip
+            # defaults to --user here, run#38 forensics).
+            echo "== ensure idf_component_manager =="
+            { python3 -m pip install --user idf-component-manager \
+                || python3 -m pip install idf-component-manager \
+                || python3 -m pip install --user --break-system-packages idf-component-manager; } \
+              || { echo "== IDF-COMPONENT-MANAGER INSTALL FAILED =="; exit 1; }
+            python3 -c "import idf_component_manager, sys; print('idf_component_manager OK on', sys.executable)" \
+              || { echo "== IDF-COMPONENT-MANAGER IMPORT FAILED =="; exit 1; }
             echo "== make -C nuttx bootloader =="
             make -C nuttx bootloader 2>&1 || echo "== BOOTLOADER MAKE FAILED (full output above) =="
             echo "== bootloader products in nuttx/: =="
