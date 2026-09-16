@@ -40,6 +40,9 @@ CONFIG_UART0_SERIAL_CONSOLE=n
 # --- LCD: ST7789 240x240 (FSPI) + LVGL --------------------------------------
 CONFIG_LCD=y
 CONFIG_LCD_ST7789=y
+# drivers/lcd/st7789.c #errors out without SPI command/data mode (run#21).
+CONFIG_SPI=y
+CONFIG_SPI_CMDDATA=y
 CONFIG_LCD_FRAMEBUFFER=y
 CONFIG_LCD_FB=y
 CONFIG_LCD_PORTRAIT=y

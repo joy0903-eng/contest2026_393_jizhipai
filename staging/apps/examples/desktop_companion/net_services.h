@@ -4,10 +4,10 @@
  * Networking, time, weather and local todo storage for the AI-VOX3 desktop
  * companion.
  *
- *  - Wi-Fi connection (via wapi / saved params)
- *  - NTP time synchronization (clock_synchronize)
- *  - Weather fetch from Open-Meteo (no API key)
- *  - Todo persistence via NVS (non-volatile storage)
+ *  - Wi-Fi link status via netlib (association is a placeholder for now)
+ *  - NTP time synchronization via the apps ntpc daemon (ntpc_start)
+ *  - Weather fetch from Open-Meteo over plain HTTP (no API key)
+ *  - Todo list kept in RAM during bring-up (volatile across reboots)
  *
  ****************************************************************************/
 

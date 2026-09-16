@@ -12,7 +12,7 @@ APPNAME  = desktop_companion
 
 # Source files
 MAINSRC  = main.c
-CSRCS    = ui_lvgl.c net_services.c llm_client.c \
+CSRCS    = ui_lvgl.c net_services.c llm_client.c http_util.c \
            audio_pipeline.c face_follow.c smart_home.c
 
 # Include path (this directory holds the local headers)

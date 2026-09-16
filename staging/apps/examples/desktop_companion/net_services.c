@@ -1,11 +1,15 @@
 /****************************************************************************
  * apps/examples/desktop_companion/net_services.c
  *
- * Implementation of Wi-Fi / NTP / weather / todo(NVS) services.
+ * Implementation of Wi-Fi / NTP / weather / todo services.
  *
- * Weather uses Open-Meteo (https://api.open-meteo.com) which needs NO API key.
- * Wi-Fi credentials are NOT stored in source — they are passed in at runtime
- * (or read from saved params).
+ * - Weather uses Open-Meteo (api.open-meteo.com) which needs NO API key,
+ *   fetched through the local http_util (plain HTTP).
+ * - NTP uses the apps netutils NTP client daemon (ntpc_start).
+ * - Wi-Fi association is a placeholder (-ENOSYS) until the esp32s3 wext
+ *   passkey path is wired up; net_is_connected works via netlib.
+ * - Todos are kept in RAM for bring-up (volatile across reboots); the
+ *   previous ESP-IDF nvs.h API is not part of the NuttX app-level ABI.
  *
  ****************************************************************************/
 
@@ -20,7 +24,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <time.h>
 #include <syslog.h>
 
 #include <net/if.h>
@@ -28,13 +31,10 @@
 #include <netinet/in.h>
 
 #include <netutils/netlib.h>
-#include <nuttx/clock.h>
-#include <nuttx/net/webclient.h>
-#include <wireless/wapi.h>
-
-#include <nvs.h>
+#include <netutils/ntpclient.h>
 
 #include "net_services.h"
+#include "http_util.h"
 #include "config.h"
 
 /****************************************************************************
@@ -42,12 +42,17 @@
  ****************************************************************************/
 
 #define WLAN_IFNAME            "wlan0"
-#define NVS_NAMESPACE          "aivox3"
-#define NVS_TODO_COUNT_KEY     "todocount"
-#define NVS_TODO_PREFIX        "todo"
+
+/* Plain-HTTP mirror of AIVOX3_WEATHER_URL (https). Keep in sync with
+ * config.h until TLS support lands in http_util. */
+#define WEATHER_HTTP_HOST      "api.open-meteo.com"
+#define WEATHER_HTTP_PORT      80
+
+/* In-RAM todo store (bring-up; volatile across reboots). */
+#define TODO_MAX               8
+#define TODO_ITEM_LEN          64
 
 /* Weather code -> short text (subset of WMO codes). */
-#define WEATHER_CODE_MAX       12
 
 /****************************************************************************
  * Private Data
@@ -66,6 +71,9 @@ static const struct
   { 65,  "Heavy rain" }, { 71,  "Light snow" },   { 80, "Rain showers" },
   { 95,  "Thunderstorm" },
 };
+
+static char g_todo_items[TODO_MAX][TODO_ITEM_LEN];
+static int g_todo_count;
 
 /****************************************************************************
  * Private Functions
@@ -89,58 +97,6 @@ static const char *weather_code_to_text(int code)
 }
 
 /****************************************************************************
- * Name: fetch_callback
- *
- * Description:
- *   webclient body accumulator. Drops the HTTP header (up to \r\n\r\n).
- *
- ****************************************************************************/
-
-struct fetch_buf_s
-{
-  char *buf;
-  size_t cap;
-  size_t len;
-  bool headers_done;
-};
-
-static int fetch_callback(FAR struct webclient_session *s,
-                          FAR const char *buf, size_t len, FAR void *arg)
-{
-  struct fetch_buf_s *fb = (struct fetch_buf_s *)arg;
-  size_t i = 0;
-
-  if (!fb->headers_done)
-    {
-      /* Search for the end of the header section. */
-      for (i = 0; i + 3 < len; i++)
-        {
-          if (buf[i] == '\r' && buf[i + 1] == '\n' &&
-              buf[i + 2] == '\r' && buf[i + 3] == '\n')
-            {
-              i += 4;
-              fb->headers_done = true;
-              break;
-            }
-        }
-
-      if (!fb->headers_done)
-        {
-          return 0;   /* still in headers */
-        }
-    }
-
-  /* Append body bytes. */
-  if (fb->len + (len - i) < fb->cap)
-    {
-      memcpy(fb->buf + fb->len, buf + i, len - i);
-      fb->len += (len - i);
-    }
-
-  return 0;
-}
-
-/****************************************************************************
  * Public Functions
  ****************************************************************************/
 
@@ -159,18 +115,14 @@ int net_init(void)
 
 int net_wifi_connect(const char *ssid, const char *pass)
 {
-  int ret;
-
-  /* wapi associates the STA interface with the given SSID/PSK. If ssid is
-   * NULL, the saved params (esp32s3_wifi_save_param) are used. */
-  ret = wapi_set_sta_connect(WLAN_IFNAME, ssid, pass);
-  if (ret < 0)
-    {
-      syslog(LOG_ERR, "ERROR: wifi connect failed: %d\n", ret);
-      return ret;
-    }
-
-  return OK;
+  /* TODO(real-device): esp32s3 STA association. The generic wapi API only
+   * exposes wapi_set_essid()/wapi_set_freq(); the WPA passkey path goes
+   * through the platform wext extension (SIOCSIWESSID with the extra
+   * payload) or wpa_driver_wext_associate(). Wire this up on the board,
+   * or rely on CONFIG_ESP32S3_WIFI_SAVE_PARAM auto-join for now. */
+  syslog(LOG_WARNING, "net_wifi_connect: not wired yet (ssid=%s)\n",
+         ssid != NULL ? ssid : "?");
+  return -ENOSYS;
 }
 
 /****************************************************************************
@@ -214,20 +166,24 @@ bool net_wait_linked(int timeout_ms)
 
 /****************************************************************************
  * Name: net_ntp_sync
+ *
+ * Description:
+ *   Start the NTP client daemon. It synchronizes the clock in the
+ *   background using CONFIG_NETUTILS_NTPCLIENT_SERVER. Later calls are
+ *   no-ops while the daemon runs.
+ *
  ****************************************************************************/
 
 int net_ntp_sync(void)
 {
-  /* clock_synchronize() performs an NTP request using the configured server
-   * (CONFIG_NETUTILS_NTPCLIENT + CONFIG_NETUTILS_NTPCLIENT_SERVER). It blocks
-   * until the clock is updated or it fails. */
-  int ret = clock_synchronize();
+  int ret = ntpc_start();
   if (ret < 0)
     {
-      syslog(LOG_WARNING, "WARNING: NTP sync failed: %d\n", ret);
+      syslog(LOG_WARNING, "WARNING: NTP daemon start failed: %d\n", ret);
       return ret;
     }
 
+  syslog(LOG_INFO, "NTP daemon started (task %d)\n", ret);
   return OK;
 }
 
@@ -237,37 +193,32 @@ int net_ntp_sync(void)
 
 int net_get_weather(char *desc_out, size_t desc_len, int *temp_out)
 {
-  char url[160];
-  char body[256];
-  struct fetch_buf_s fb;
-  struct webclient_context ctx;
+  char path[160];
+  char body[512];
+  size_t resp_len = 0;
   char *p;
   double temp = 0.0;
   int code = -1;
+  int status = 0;
   int ret;
 
-  snprintf(url, sizeof(url),
-           "%s?latitude=%f&longitude=%f&current_weather=true",
-           AIVOX3_WEATHER_URL, AIVOX3_WEATHER_LAT, AIVOX3_WEATHER_LON);
+  snprintf(path, sizeof(path),
+           "/v1/forecast?latitude=%.4f&longitude=%.4f&current_weather=true",
+           AIVOX3_WEATHER_LAT, AIVOX3_WEATHER_LON);
 
-  memset(&fb, 0, sizeof(fb));
-  fb.buf = body;
-  fb.cap = sizeof(body);
-
-  memset(&ctx, 0, sizeof(ctx));
-  ctx.url     = url;
-  ctx.method  = "GET";
-  ctx.callback = fetch_callback;
-  ctx.cbarg   = &fb;
-
-  ret = webclient_perform(&ctx);
+  ret = http_request(WEATHER_HTTP_HOST, WEATHER_HTTP_PORT, "GET", path,
+                     NULL, NULL, 0,
+                     body, sizeof(body), &resp_len, &status);
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: weather HTTP failed: %d\n", ret);
       return ret;
     }
 
-  body[fb.len] = '\0';
+  if (status != 200)
+    {
+      syslog(LOG_WARNING, "WARNING: weather HTTP status %d\n", status);
+    }
 
   /* Parse current_weather.temperature and .weathercode (minimal scan). */
   p = strstr(body, "\"temperature\":");
@@ -298,23 +249,27 @@ int net_get_weather(char *desc_out, size_t desc_len, int *temp_out)
 
 /****************************************************************************
  * Name: todo_load_first
+ *
+ * Description:
+ *   Copy the first in-RAM todo item into buf. Returns OK when one exists.
+ *
  ****************************************************************************/
 
 int todo_load_first(char *buf, size_t len)
 {
-  nvs_handle_t h;
-  size_t rlen = len;
-  int ret;
-
-  ret = nvs_open(NVS_NAMESPACE, NVS_READONLY, &h);
-  if (ret != OK)
+  if (buf == NULL || len == 0)
     {
-      return ret;
+      return -EINVAL;
     }
 
-  ret = nvs_get_str(h, NVS_TODO_PREFIX "0", buf, &rlen);
-  nvs_close(h);
-  return ret;
+  if (g_todo_count <= 0)
+    {
+      return -ENOENT;
+    }
+
+  strncpy(buf, g_todo_items[0], len - 1);
+  buf[len - 1] = '\0';
+  return OK;
 }
 
 /****************************************************************************
@@ -323,41 +278,21 @@ int todo_load_first(char *buf, size_t len)
 
 int todo_add(const char *text)
 {
-  nvs_handle_t h;
-  int count = 0;
-  size_t rlen = sizeof(count);
-  char key[16];
-  int ret;
-
   if (text == NULL || *text == '\0')
     {
       return -EINVAL;
     }
 
-  ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
-  if (ret != OK)
+  if (g_todo_count >= TODO_MAX)
     {
-      return ret;
+      syslog(LOG_WARNING, "todo list full (%d)\n", TODO_MAX);
+      return -ENOSPC;
     }
 
-  /* Read current count (default 0). */
-  if (nvs_get_i32(h, NVS_TODO_COUNT_KEY, (int32_t *)&count) != OK)
-    {
-      count = 0;
-    }
-
-  /* Store next item and bump the counter. */
-  snprintf(key, sizeof(key), NVS_TODO_PREFIX "%d", count);
-  ret = nvs_set_str(h, key, text);
-  if (ret == OK)
-    {
-      count++;
-      nvs_set_i32(h, NVS_TODO_COUNT_KEY, count);
-      nvs_commit(h);
-    }
-
-  nvs_close(h);
-  return ret;
+  strncpy(g_todo_items[g_todo_count], text, TODO_ITEM_LEN - 1);
+  g_todo_items[g_todo_count][TODO_ITEM_LEN - 1] = '\0';
+  g_todo_count++;
+  return OK;
 }
 
 /****************************************************************************
@@ -366,30 +301,7 @@ int todo_add(const char *text)
 
 int todo_clear(void)
 {
-  nvs_handle_t h;
-  int count = 0;
-  char key[16];
-  int i;
-  int ret;
-
-  ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
-  if (ret != OK)
-    {
-      return ret;
-    }
-
-  if (nvs_get_i32(h, NVS_TODO_COUNT_KEY, (int32_t *)&count) == OK)
-    {
-      for (i = 0; i < count; i++)
-        {
-          snprintf(key, sizeof(key), NVS_TODO_PREFIX "%d", i);
-          nvs_erase_key(h, key);
-        }
-
-      nvs_set_i32(h, NVS_TODO_COUNT_KEY, 0);
-      nvs_commit(h);
-    }
-
-  nvs_close(h);
+  memset(g_todo_items, 0, sizeof(g_todo_items));
+  g_todo_count = 0;
   return OK;
 }

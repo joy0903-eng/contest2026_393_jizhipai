@@ -4,6 +4,11 @@
  * OpenAI-compatible chat client. Posts a single user turn to
  * /v1/chat/completions and extracts the assistant message text.
  *
+ * HTTP transport: local http_util (POSIX sockets, no TLS). The canonical
+ * endpoint in config.h is https://; until TLS is wired up we target the
+ * same host over plain HTTP. If the server rejects plain HTTP the call
+ * fails gracefully and the UI keeps working.
+ *
  * SECURITY: the API key is taken ONLY from AIVOX3_LLM_API_KEY (which maps to
  * the build-time CONFIG_AIVOX3_LLM_API_KEY). No secret is hard-coded.
  *
@@ -17,13 +22,10 @@
 
 #include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <alloca.h>
 #include <syslog.h>
 
-#include <nuttx/net/webclient.h>
-
+#include "http_util.h"
 #include "llm_client.h"
 #include "config.h"
 
@@ -37,6 +39,12 @@
 
 #define REQ_BUF_LEN   1024
 #define RESP_BUF_LEN  2048
+
+/* Plain-HTTP mirror of AIVOX3_LLM_BASE_URL + AIVOX3_LLM_CHAT_PATH.
+ * Keep in sync with config.h until TLS support lands in http_util. */
+#define LLM_HTTP_HOST  "token-plan-cn.xiaomimimo.com"
+#define LLM_HTTP_PORT  80
+#define LLM_HTTP_PATH  "/v1/chat/completions"
 
 /****************************************************************************
  * Private Functions
@@ -73,56 +81,6 @@ static size_t json_escape(char *dst, size_t dst_cap, const char *src)
 
   dst[j] = '\0';
   return j;
-}
-
-/****************************************************************************
- * Name: resp_callback
- *
- * Description:
- *   Accumulate the HTTP body (skipping headers) into a buffer.
- *
- ****************************************************************************/
-
-struct resp_buf_s
-{
-  char *buf;
-  size_t cap;
-  size_t len;
-  bool headers_done;
-};
-
-static int resp_callback(FAR struct webclient_session *s,
-                         FAR const char *buf, size_t len, FAR void *arg)
-{
-  struct resp_buf_s *rb = (struct resp_buf_s *)arg;
-  size_t i = 0;
-
-  if (!rb->headers_done)
-    {
-      for (i = 0; i + 3 < len; i++)
-        {
-          if (buf[i] == '\r' && buf[i + 1] == '\n' &&
-              buf[i + 2] == '\r' && buf[i + 3] == '\n')
-            {
-              i += 4;
-              rb->headers_done = true;
-              break;
-            }
-        }
-
-      if (!rb->headers_done)
-        {
-          return 0;
-        }
-    }
-
-  if (rb->len + (len - i) < rb->cap)
-    {
-      memcpy(rb->buf + rb->len, buf + i, len - i);
-      rb->len += (len - i);
-    }
-
-  return 0;
 }
 
 /****************************************************************************
@@ -184,12 +142,12 @@ static void extract_content(const char *body, char *out_buf, size_t out_len)
 
 int llm_chat(const char *user_text, char *out_buf, size_t out_len)
 {
-  char url[160];
   char req[REQ_BUF_LEN];
   char esc[512];
   char resp[RESP_BUF_LEN];
-  struct resp_buf_s rb;
-  struct webclient_context ctx;
+  char hdr[192];
+  size_t resp_len = 0;
+  int status = 0;
   int ret;
 
   if (out_buf != NULL && out_len > 0)
@@ -209,9 +167,6 @@ int llm_chat(const char *user_text, char *out_buf, size_t out_len)
       return -EINVAL;
     }
 
-  /* Build the full endpoint URL. */
-  snprintf(url, sizeof(url), "%s%s", AIVOX3_LLM_BASE_URL, AIVOX3_LLM_CHAT_PATH);
-
   /* Build the JSON request body. */
   json_escape(esc, sizeof(esc), user_text);
   snprintf(req, sizeof(req),
@@ -223,38 +178,26 @@ int llm_chat(const char *user_text, char *out_buf, size_t out_len)
            AIVOX3_LLM_MODEL, SYSTEM_PROMPT, esc,
            AIVOX3_LLM_MAX_TOKENS, AIVOX3_LLM_TEMPERATURE);
 
-  /* Accumulate the response body. */
-  memset(&rb, 0, sizeof(rb));
-  rb.buf = resp;
-  rb.cap = sizeof(resp);
+  /* Extra headers: bearer auth + JSON content type (each ends with CRLF). */
+  snprintf(hdr, sizeof(hdr),
+           "Authorization: Bearer %s\r\n"
+           "Content-Type: application/json\r\n",
+           AIVOX3_LLM_API_KEY);
 
-  memset(&ctx, 0, sizeof(ctx));
-  ctx.url     = url;
-  ctx.method  = "POST";
-  ctx.post_data    = req;
-  ctx.post_datalen = (int)strlen(req);
-  ctx.callback = resp_callback;
-  ctx.cbarg   = &rb;
-  /* Extra headers: bearer auth + JSON content type. The NuttX webclient
-   * context exposes `header` for additional request headers.
-   * TODO(real-device/build): if your tree names this field differently,
-   * adapt (e.g. prepend headers manually or use webclient_set_header()). */
-  {
-    char *hdr = alloca(160);
-    snprintf(hdr, 160,
-             "Authorization: Bearer %s\r\nContent-Type: application/json\r\n",
-             AIVOX3_LLM_API_KEY);
-    ctx.header = hdr;
-  }
-
-  ret = webclient_perform(&ctx);
+  ret = http_request(LLM_HTTP_HOST, LLM_HTTP_PORT, "POST", LLM_HTTP_PATH,
+                     hdr, req, strlen(req),
+                     resp, sizeof(resp), &resp_len, &status);
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: LLM HTTP POST failed: %d\n", ret);
       return ret;
     }
 
-  resp[rb.len] = '\0';
+  if (status != 200)
+    {
+      syslog(LOG_ERR, "ERROR: LLM HTTP status %d\n", status);
+    }
+
   extract_content(resp, out_buf, out_len);
   return OK;
 }
