@@ -21,6 +21,7 @@ jobs:
           fetch-depth: 1
 
       - name: Install build deps + repo tool (fail loud)
+        id: deps
         run: |
           sudo apt-get update
           sudo apt-get install -y git git-lfs curl wget xz-utils unzip build-essential \
@@ -38,6 +39,7 @@ jobs:
           git config --global http.postBuffer 524288000
 
       - name: Install xtensa-esp32s3-elf toolchain 12.2.0 (single-dash names, matches Make.defs)
+        id: toolchain
         run: |
           wget -c "https://github.com/espressif/crosstool-NG/releases/download/esp-12.2.0_20230208/xtensa-esp32s3-elf-12.2.0_20230208-x86_64-linux-gnu.tar.gz" -O /tmp/xt.tar.gz
           sudo tar -xf /tmp/xt.tar.gz -C /opt
@@ -45,6 +47,7 @@ jobs:
           xtensa-esp32s3-elf-gcc --version | head -n1
 
       - name: repo init + sync (official full manifest, fail loud)
+        id: sync
         run: |
           mkdir -p openvela
           cd openvela
@@ -60,6 +63,7 @@ jobs:
           ls -la build.sh >> sync.log 2>&1 || true
 
       - name: Install AI-VOX3 BSP + app (validated staging layout, Make flow)
+        id: bsp
         run: |
           cp -r team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3 openvela/vendor/espressif/boards/esp32s3/ai_vox3
           cp -r team_repo/staging/apps/examples/desktop_companion openvela/apps/examples/desktop_companion
@@ -95,6 +99,7 @@ jobs:
           cat openvela/apps/examples/Kconfig
 
       - name: Build AI-VOX3 openvela config (official m() Makefile chain via VELA_USE_MAKEFILE=1)
+        id: build
         working-directory: openvela
         run: |
           CFG="vendor/espressif/boards/esp32s3/ai_vox3/configs/openvela"
@@ -239,6 +244,13 @@ jobs:
       - name: Publish build log to logs branch on failure
         if: failure()
         run: |
+          # Step-level forensics (run#36 died with zero logs: which step?):
+          echo "=== STEP OUTCOMES ===" | tee step_outcomes.txt
+          echo "deps: ${{ steps.deps.outcome }}" | tee -a step_outcomes.txt
+          echo "toolchain: ${{ steps.toolchain.outcome }}" | tee -a step_outcomes.txt
+          echo "sync: ${{ steps.sync.outcome }}" | tee -a step_outcomes.txt
+          echo "bsp: ${{ steps.bsp.outcome }}" | tee -a step_outcomes.txt
+          echo "build: ${{ steps.build.outcome }}" | tee -a step_outcomes.txt
           tail -c 2000000 openvela/build.log > build_tail.log 2>/dev/null || echo "no build.log" > build_tail.log
           tail -c 2000000 openvela/sync.log > sync_tail.log 2>/dev/null || echo "no sync.log" > sync_tail.log
           tail -c 2000000 openvela/init.log > init_tail.log 2>/dev/null || echo "no init.log" > init_tail.log
@@ -247,6 +259,7 @@ jobs:
           git config --global user.name "OpenVela CI"
           mkdir -p /tmp/pub && cd /tmp/pub
           git init -q -b logs .
+          cp "${{ github.workspace }}/step_outcomes.txt" .
           cp "${{ github.workspace }}/build_tail.log" .
           cp "${{ github.workspace }}/sync_tail.log" . 2>/dev/null || true
           cp "${{ github.workspace }}/init_tail.log" . 2>/dev/null || true
