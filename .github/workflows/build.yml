@@ -713,7 +713,7 @@ jobs:
           # actually landed (PATCH CHECK OK / PATCH VERIFY OK / the elf2image
           # command line).  Without it we cannot confirm a 5-segment image was
           # produced by a patched tree rather than an unpatched one.
-          cp "${{ github.workspace }}/openvela/bsp.log" ./bsp.log 2>/dev/null || echo "no bsp.log" > bsp.log
+          cp "${{ github.workspace }}/bsp.log" ./bsp.log 2>/dev/null || echo "no bsp.log" > bsp.log
           git add -A
           git commit -q -m "firmware build run #${{ github.run_number }}"
           git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
@@ -735,9 +735,28 @@ jobs:
           # bsp.log is the ONLY record of the BSP step's output.  run#58 and
           # run#59 both failed in that step and we were blind, because nothing
           # ever captured it -- build.log belongs to the NEXT step.  Ship it.
-          tail -c 2000000 openvela/bsp.log > bsp_tail.log 2>/dev/null || echo "no bsp.log" > bsp_tail.log
+          #
+          # run#65: this line read openvela/bsp.log, but the bsp step has NO
+          # working-directory, so its `| tee bsp.log` (which runs BEFORE the
+          # build step sets working-directory: openvela) lands at the WORKSPACE
+          # ROOT.  Every failure therefore shipped the literal string
+          # "no bsp.log" and we spent several rounds believing the patch loop
+          # never ran -- we simply had no record of it either way.  Read from
+          # the root, where it is actually written.
+          tail -c 2000000 bsp.log > bsp_tail.log 2>/dev/null || echo "no bsp.log" > bsp_tail.log
           tail -c 2000000 openvela/sync.log > sync_tail.log 2>/dev/null || echo "no sync.log" > sync_tail.log
           tail -c 2000000 openvela/init.log > init_tail.log 2>/dev/null || echo "no init.log" > init_tail.log
+          # A missing log must be LOUD.  The `|| echo "no bsp.log"` idiom above
+          # is exactly how run#58..run#65 shipped a placeholder for two months
+          # of debugging without anyone noticing the file was never found.
+          # Fail loudly on stdout (visible in the Actions UI) while still
+          # emitting a placeholder so the artifact set stays uniform.
+          for f in bsp.log sync.log init.log; do
+            if [ ! -s "${{ github.workspace }}/$f" ]; then
+              echo "== LOG MISSING: $f not found at workspace root =="
+              echo "(the step that writes it either never ran or wrote elsewhere)"
+            fi
+          done
           ls -la openvela > dirlist.txt 2>&1 || true
           git config --global user.email "ci@openvela-contest.local"
           git config --global user.name "OpenVela CI"
