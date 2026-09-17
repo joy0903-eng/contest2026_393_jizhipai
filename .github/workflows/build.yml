@@ -480,7 +480,34 @@ jobs:
             # Capture the EXACT elf2image invocation (post-expansion) so we can
             # see --ram-only-header present or absent.
             echo "== elf2image command line (from make's own output) ==" >> build.log
-            grep -nE 'elf2image' build.log >> build.log 2>&1 || true
+            # run#61: this used to be `grep -nE 'elf2image' build.log >> build.log`.
+            # A file can never be both grep's input and its >> output -- GNU grep
+            # refuses with "grep: build.log: input file is also the output" and
+            # emits NOTHING.  So this forensics block has never once reported the
+            # real command line; the only elf2image text in our logs came from a
+            # line-numbered `grep -n` of Config.mk further up (which is a static
+            # source listing, NOT the post-expansion invocation).
+            # Grep into a temp file, then append that.
+            grep -nE 'elf2image' build.log > /tmp/elf2image_hits.txt 2>&1 || true
+            cat /tmp/elf2image_hits.txt >> build.log
+            # The decisive line: the post-expansion value of the option list.
+            # Read it straight out of Config.mk with sed instead of shelling out
+            # to `make` with a heredoc -- a heredoc inside a YAML block scalar
+            # needs every line indented to the same column, which is exactly the
+            # kind of fragility that has already cost us runs.  We only need to
+            # know whether --ram-only-header is still reachable, and under which
+            # symbol, so a textual read is sufficient and cannot break YAML.
+            echo "== ELF2IMAGE_OPTS definition (with line numbers) ==" >> build.log
+            grep -n 'ELF2IMAGE_OPTS' nuttx/tools/esp32s3/Config.mk >> build.log 2>&1 || true
+            echo "== ram-only-header reachability ==" >> build.log
+            if grep -q 'ram-only-header' nuttx/tools/esp32s3/Config.mk; then
+              echo "PRESENT: Config.mk still references --ram-only-header" >> build.log
+              echo "         (patch 0002 did NOT apply -> expect segcount != 5)" >> build.log
+            else
+              echo "ABSENT: --ram-only-header is gone from Config.mk (patch 0002 applied)" >> build.log
+            fi
+            echo "== CONFIG_ESPRESSIF_SIMPLE_BOOT as the build sees it ==" >> build.log
+            grep -n 'ESPRESSIF_SIMPLE_BOOT' nuttx/.config >> build.log 2>&1 || echo "  (symbol not set)" >> build.log
             echo "M-CHAIN rc=$rc" >> build.log
             ls -la nuttx/nuttx nuttx/nuttx.bin >> build.log 2>&1
             echo "$rc" > build_rc.txt
@@ -519,7 +546,37 @@ jobs:
             exit 1
           fi
           size="$(stat -c%s nuttx/nuttx.bin)"
-          echo "BUILD OK: nuttx/nuttx.bin present (${size} bytes, magic 0xE9, m rc=$rc)" >> build.log
+          # ------------------------------------------------------------------
+          # BOOTABILITY GATE (2026-09-17).  Everything above only proves that
+          # *an* ESP32-S3 image was produced.  It does not prove the image can
+          # boot.  Hardware A/B on the physical board, same board and cable:
+          #
+          #   2 segments  ->  0 serial bytes, ROM never starts the app
+          #   5 segments  ->  1519 bytes of loader log, boots cleanly
+          #
+          # A 2-segment image is the signature of `elf2image --ram-only-header`,
+          # which tools/esp32s3/Config.mk emits whenever
+          # CONFIG_ESPRESSIF_SIMPLE_BOOT=y.  The nuttx patch 0002 exists to drop
+          # that flag, but if the patch loop silently fails to run we ship a
+          # perfectly "green" build that bricks into a black screen with no
+          # LEDs -- which is EXACTLY the board state the user reported.
+          #
+          # So: refuse to publish anything that is not 5 segments.
+          # ------------------------------------------------------------------
+          segcount="$(od -An -tu1 -j1 -N1 nuttx/nuttx.bin | tr -d ' \n')"
+          entry="$(od -An -tx4 -j4 -N4 nuttx/nuttx.bin | tr -d ' \n')"
+          echo "SEGCOUNT GATE: nuttx.bin segcount=$segcount entry_le=0x$entry" >> build.log
+          if [ "$segcount" != "5" ]; then
+            echo "== BUILD FAILED: BOOTABILITY GATE -- segcount=$segcount, expected 5 ==" >> build.log
+            echo "   A $segcount-segment image does NOT boot on this board (verified on" >> build.log
+            echo "   real hardware: 2 segments = zero serial output).  Most likely" >> build.log
+            echo "   --ram-only-header is still in nuttx/tools/esp32s3/Config.mk," >> build.log
+            echo "   meaning staging/patches/0002-* did not apply.  Check the" >> build.log
+            echo "   'NUTTX PATCH' lines in bsp.log; if none appear, the patch loop" >> build.log
+            echo "   never executed and the PATCH CHECK gate was skipped with it." >> build.log
+            exit 1
+          fi
+          echo "BUILD OK: nuttx/nuttx.bin present (${size} bytes, magic 0xE9, m rc=$rc, segcount=$segcount, entry=0x$entry)" >> build.log
           ls -la nuttx/nuttx nuttx/nuttx.bin >> build.log 2>&1
 
       - name: Collect firmware
@@ -586,6 +643,32 @@ jobs:
             echo "== nuttx.bin =="
             ls -la nuttx/nuttx.bin 2>/dev/null || echo "  MISSING"
           } >> firmware/build_tail.log
+          echo "== Collect: SEGMENT COUNT (bootability gate) =="
+          # 2026-09-17 real-device A/B on the physical board, same board / same
+          # cable: a 2-segment image produces ZERO serial bytes and 0 panics
+          # (the ROM never hands control over), while a 5-segment image produces
+          # the full 1519-byte loader log and boots.  Segment count is therefore
+          # the single best predictor of "will this image boot at all".
+          # esp_image_header_t (0x18 variant): byte[1] = segment count,
+          # byte[4..8] = entry point (little-endian), segment table at 0x18.
+          segcount=$(od -An -tu1 -j1 -N1 nuttx/nuttx.bin 2>/dev/null | tr -d ' \n')
+          entry=$(od -An -tx4 -j4 -N4 nuttx/nuttx.bin 2>/dev/null | tr -d ' \n')
+          echo "nuttx.bin segcount=$segcount entry_le=0x$entry"
+          echo "segcount=$segcount" > segcount.txt
+          echo "entry_le=0x$entry" >> segcount.txt
+          if [ "$segcount" != "5" ]; then
+            echo "== SEGMENT COUNT GATE FAILED: expected 5, got '$segcount' =="
+            echo "   A non-5-segment image is very likely unbootable on this board"
+            echo "   (2-segment = 0 serial bytes, verified on hardware 2026-09-17)."
+            echo "   Usual cause: --ram-only-header still present in"
+            echo "   nuttx/tools/esp32s3/Config.mk because the nuttx patch loop"
+            echo "   did not run.  See BSP SECTION 2/3 in bsp.log."
+            echo "   NOT a hard failure here on purpose -- the verdict step decides,"
+            echo "   so Collect still stages the binary for inspection."
+          else
+            echo "SEGMENT COUNT GATE OK: segcount=5 (known-good shape)"
+          fi
+          cp -v segcount.txt firmware/ 2>&1 || true
           echo "== Collect: firmware/ contents =="
           ls -la firmware || true
           echo "== Collect: DONE =="
@@ -666,6 +749,11 @@ jobs:
           # and its merge transcript used to be lost on failure -- ship it.
           cp "${{ github.workspace }}/openvela/collect.log" . 2>/dev/null || true
           cp "${{ github.workspace }}/build_tail.log" .
+          # run#61: bsp_tail.log was computed above but NEVER copied here --
+          # the line was simply missing, so every failure shipped a logs branch
+          # with no BSP record at all and we had to infer the BSP step's fate
+          # from the outcome line alone.  Copy it.
+          cp "${{ github.workspace }}/bsp_tail.log" . 2>/dev/null || true
           cp "${{ github.workspace }}/sync_tail.log" . 2>/dev/null || true
           cp "${{ github.workspace }}/init_tail.log" . 2>/dev/null || true
           cp "${{ github.workspace }}/dirlist.txt" . 2>/dev/null || true
