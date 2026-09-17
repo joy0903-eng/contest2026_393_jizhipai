@@ -76,16 +76,73 @@ int audio_capture_read_timeout(void *buf, size_t len, int timeout_ms);
  *
  * The capture ring buffer is completely independent of this path: dropping
  * or delaying a word never stalls or blocks microphone capture.
+ *
+ * INVARIANT - DO NOT BREAK
+ * ------------------------
+ * dsp_vad / dsp_mfcc / kws_engine keep their working areas in module-static
+ * arrays, so they are not reentrant:
+ *
+ *   - dsp_vad_feed() may only run on the capture thread (this module),
+ *   - dsp_vad_trim() / dsp_mfcc_compute() / kws_*() may only run on one
+ *     consumer at a time,
+ *   - dsp_vad_feed() must NOT run concurrently with the above: feed() itself
+ *     reaches dsp_vad_trim() through
+ *     feed -> vad_process_frame -> vad_finish_capture -> dsp_vad_trim,
+ *     which uses the same static workspace.
+ *
+ * The last point is what "while an utterance is pending, stop feeding"
+ * actually buys us.  It is a load-bearing invariant: removing it would not
+ * crash, it would produce occasional silent mis-recognition, which is much
+ * worse to debug.  Keep the gate.
  * ------------------------------------------------------------------------- */
 
-/* Retrieve a finished utterance, in samples (int16, mono, AIVOX3_AUDIO_RATE).
+/* 1 while an utterance is being captured RIGHT NOW, 0 otherwise.
  *
- * Returns the number of samples copied, 0 when no utterance is pending, or a
- * negated errno (-EAGAIN when capture/the VAD is not running,
- * -ENOSPC when the utterance does not fit in `out`).  Use a buffer of at
- * least VAD_MAX_WORD_SAMPLES (44800 samples = 2.8 s).
+ * Precise semantics: it reports the VAD's capturing state, which is cleared
+ * the moment an utterance is published.  So it also reads 0
+ *   - during playback (the ES8311 is half duplex: nothing is captured), and
+ *   - while a finished utterance is pending recognition.
+ * Use it for a "listening" indicator.  Do NOT use it for "recognizing":
+ * that state is what audio_capture_process_word() reports.
+ */
+int audio_capture_is_speech(void);
+
+/* Zero-copy processing of a finished utterance - PREFERRED.
  *
- * Calling this also resumes feeding.  It is safe to call from any thread.
+ * When an utterance is pending, `fn` is called with a pointer to the VAD's
+ * internal buffer (mono int16, AIVOX3_AUDIO_RATE, up to VAD_MAX_WORD_SAMPLES
+ * samples).  This costs no extra memory: the alternative
+ * (audio_capture_take_word) needs a second 87 KB buffer in the caller.
+ *
+ * The utterance is ALREADY silence-trimmed: vad_finish_capture() calls
+ * dsp_vad_trim() before publishing it (dsp_vad.c:178-182).  Do NOT trim it
+ * again - a second pass with the same 18% threshold eats the ~60 ms margin
+ * that the first pass deliberately keeps, shortening the first syllables and
+ * pushing the DTW distance up.
+ *
+ * `fn` runs without the internal lock held, so it may take a few tens of ms
+ * (kws_recognize) without blocking microphone capture.  It MUST NOT block
+ * indefinitely, and must not use the pointer after it returns.
+ *
+ * Note on the result: kws_recognize() returns -1 both for "rejected" and for
+ * "engine not ready / utterance too short", so an unloaded template bank
+ * looks exactly like an over-strict threshold.  Check kws_is_ready() first
+ * when tuning.
+ *
+ * Returns 0 when no utterance is pending, the value returned by `fn`
+ * otherwise, or -EAGAIN / -EINVAL.
+ */
+typedef int (*audio_word_fn_t)(const int16_t *pcm, int nsamples, void *arg);
+int audio_capture_process_word(audio_word_fn_t fn, void *arg);
+
+/* Copy-out variant of the above.  `out` must hold at least
+ * VAD_MAX_WORD_SAMPLES (44800) samples, i.e. ~87 KB.  Prefer
+ * audio_capture_process_word() unless you really need to keep the PCM.
+ * The utterance is already trimmed (see above) - do not trim again.
+ *
+ * Returns the number of samples copied, 0 when nothing is pending, or a
+ * negated errno (-EAGAIN when the VAD is not running, -ENOSPC when the
+ * utterance does not fit).  Calling this also resumes feeding.
  */
 int audio_capture_take_word(int16_t *out, int capacity);
 

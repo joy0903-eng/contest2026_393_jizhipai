@@ -77,6 +77,14 @@
 
 #define DSP_DROP_AFTER_FRAMES  64
 
+/* Bound for waiting for an in-flight zero-copy callback in audio_deinit().
+ * The callback only runs MFCC + DTW (tens of ms), so 2 s is generous.  The
+ * wait must stay bounded: an unbounded one would let a stuck consumer hang
+ * shutdown forever.
+ */
+
+#define DSP_DEINIT_WAIT_MS  2000
+
 /****************************************************************************
  * Private Types
  ****************************************************************************/
@@ -118,19 +126,29 @@ static pthread_mutex_t    g_ring_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Offline voice front-end tap.
  *
- * g_dsp_on      - dsp_vad_init() succeeded, feeding is enabled.
- * g_word_pending- a finished utterance is waiting for audio_capture_take_word().
- *                 While it is set, capture_cb() stops feeding, which keeps the
- *                 VAD's utterance buffer stable for the consumer without
- *                 needing a second (89 KB) copy of it.
- * g_dsp_lock    - serialises dsp_vad_feed() against dsp_vad_take_word().
- *                 Held only for the duration of those two calls; kws_recognize()
- *                 is deliberately run by the caller OUTSIDE this lock.
+ * g_dsp_on       - dsp_vad_init() succeeded, feeding is enabled.
+ * g_word_pending - a finished utterance is waiting to be collected.  While it
+ *                  is set capture_cb() stops feeding, which keeps the VAD's
+ *                  utterance buffer stable for the consumer without needing
+ *                  a second (87 KB) copy of it.
+ * g_word_peeked  - a consumer is currently using the zero-copy pointer handed
+ *                  out by audio_capture_process_word().  While it is set the
+ *                  auto-drop below must NOT fire, or it would pull the
+ *                  buffer out from under the consumer.
+ * g_dsp_err_logged - dsp_vad_feed() error already reported (log once).
+ * g_dsp_lock     - serialises the flag updates and dsp_vad_feed() against
+ *                  dsp_vad_take_word().  It is deliberately NOT held while
+ *                  the consumer runs kws_recognize(): feeding is already
+ *                  gated off by g_word_pending, so the buffer is stable
+ *                  anyway and the capture thread is never blocked for the
+ *                  tens of milliseconds that MFCC + DTW take.
  */
 
-static bool               g_dsp_on       = false;
-static bool               g_word_pending = false;
-static unsigned int       g_dsp_skipped  = 0;
+static bool               g_dsp_on         = false;
+static bool               g_word_pending   = false;
+static bool               g_word_peeked    = false;
+static bool               g_dsp_err_logged = false;
+static unsigned int       g_dsp_skipped    = 0;
 static pthread_mutex_t    g_dsp_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /****************************************************************************
@@ -262,8 +280,22 @@ static void capture_cb(const int16_t *samples, int nsamples, void *arg)
 
   if (!g_word_pending)
     {
+      int r;
+
       g_dsp_skipped = 0;
-      if (dsp_vad_feed(samples, nsamples) > 0)
+
+      /* dsp_vad_feed() may reach dsp_vad_trim() internally
+       * (feed -> vad_process_frame -> vad_finish_capture -> dsp_vad_trim),
+       * which shares a module-static workspace with the consumer's
+       * kws_recognize().  The g_word_pending gate below is therefore not
+       * just about buffer stability - it is what keeps feed() and the
+       * consumer from running concurrently.  Removing it produces
+       * occasional silent mis-recognition rather than a crash.
+       */
+
+      r = dsp_vad_feed(samples, nsamples);
+
+      if (r > 0)
         {
           /* Utterance complete.  Stop feeding so the VAD's utterance
            * buffer is stable while the consumer collects it.  This is
@@ -273,11 +305,23 @@ static void capture_cb(const int16_t *samples, int nsamples, void *arg)
 
           g_word_pending = true;
         }
+      else if (r < 0 && !g_dsp_err_logged)
+        {
+          /* -EPERM (VAD not initialised) / -EINVAL.  Log once: this would
+           * otherwise print on every single capture callback.
+           */
+
+          syslog(LOG_ERR, "audio: dsp_vad_feed failed: %d\n", r);
+          g_dsp_err_logged = true;
+        }
     }
-  else if (++g_dsp_skipped >= DSP_DROP_AFTER_FRAMES)
+  else if (!g_word_peeked && ++g_dsp_skipped >= DSP_DROP_AFTER_FRAMES)
     {
       /* Nobody came to collect it.  Drop the utterance and resume so a
        * missing/stuck consumer can never wedge the VAD forever.
+       * dsp_vad_take_word(NULL, 0) clears the pending flag only: the
+       * learned noise floor and the pre-roll ring survive, which is what
+       * we want for a mere timeout (dsp_vad_reset() would discard them).
        */
 
       (void)dsp_vad_take_word(NULL, 0);
@@ -315,12 +359,16 @@ static void capture_restart(void)
       return;
     }
 
-  /* Playback stopped the codec, so any utterance in flight lost audio. */
+  /* Playback stopped the codec, so any utterance in flight lost audio.
+   * Use dsp_vad_reset() (not take_word): the pre-roll ring may still hold
+   * audio from before playback started, and it has to go.
+   */
 
   if (g_dsp_on)
     {
       (void)dsp_vad_reset();
       g_word_pending = false;
+      g_word_peeked  = false;
       g_dsp_skipped  = 0;
     }
 
@@ -416,8 +464,10 @@ int audio_init(void)
 
   memset(&g_cap, 0, sizeof(g_cap));
   memset(&g_ring, 0, sizeof(g_ring));
-  g_word_pending = false;
-  g_dsp_skipped  = 0;
+  g_word_pending   = false;
+  g_word_peeked    = false;
+  g_dsp_skipped    = 0;
+  g_dsp_err_logged = false;
 
   /* Offline voice front-end, best effort.  dsp_vad_init() allocates the
    * 44800-sample utterance buffer (~87 KB); if that fails the audio
@@ -460,10 +510,52 @@ int audio_deinit(void)
 
   if (g_dsp_on)
     {
-      dsp_vad_deinit();
-      g_dsp_on       = false;
-      g_word_pending = false;
-      g_dsp_skipped  = 0;
+      bool peeked = true;
+      int  waited;
+
+      /* Stop feeding first: after this no new utterance can be published. */
+
+      pthread_mutex_lock(&g_dsp_lock);
+      g_dsp_on = false;
+      pthread_mutex_unlock(&g_dsp_lock);
+
+      /* dsp_vad_deinit() frees the utterance buffer.  A consumer inside
+       * audio_capture_process_word()'s callback still holds a pointer into
+       * it, and that callback deliberately runs without the lock, so we
+       * must wait for it to return or we hand out a use-after-free.
+       *
+       * On timeout we skip dsp_vad_deinit() and leak the buffer: a leak is
+       * strictly better than freeing memory someone is still reading.
+       */
+
+      for (waited = 0; waited < DSP_DEINIT_WAIT_MS; waited++)
+        {
+          pthread_mutex_lock(&g_dsp_lock);
+          peeked = g_word_peeked;
+          pthread_mutex_unlock(&g_dsp_lock);
+
+          if (!peeked)
+            {
+              break;
+            }
+
+          usleep(1000);
+        }
+
+      if (peeked)
+        {
+          syslog(LOG_WARNING,
+                 "audio: word callback still busy, leaking VAD buffer\n");
+        }
+      else
+        {
+          dsp_vad_deinit();
+        }
+
+      g_word_pending   = false;
+      g_word_peeked    = false;
+      g_dsp_skipped    = 0;
+      g_dsp_err_logged = false;
     }
 
   g_ready = false;
@@ -513,12 +605,15 @@ int audio_capture_start(void)
 
   /* Drop any half-captured utterance left over from a previous session;
    * its audio is gone, so it could never be a valid keyword.
+   * dsp_vad_reset() also clears the pre-roll ring, which may still hold
+   * audio from before the gap.  The learned noise floor is preserved.
    */
 
   if (g_dsp_on)
     {
       (void)dsp_vad_reset();
       g_word_pending = false;
+      g_word_peeked  = false;
       g_dsp_skipped  = 0;
     }
 
@@ -640,6 +735,89 @@ int audio_capture_take_word(int16_t *out, int capacity)
       g_word_pending = false;
       g_dsp_skipped  = 0;
     }
+
+  pthread_mutex_unlock(&g_dsp_lock);
+  return ret;
+}
+
+/****************************************************************************
+ * Name: audio_capture_is_speech
+ ****************************************************************************/
+
+int audio_capture_is_speech(void)
+{
+  if (!g_dsp_on)
+    {
+      return 0;
+    }
+
+  /* dsp_vad_reset() (called whenever capture stops or restarts, including
+   * around playback) clears the VAD's capturing flag, so this also reads 0
+   * during the half-duplex playback window - which is the truth: nothing is
+   * being captured then.
+   */
+
+  return dsp_vad_is_speech();
+}
+
+/****************************************************************************
+ * Name: audio_capture_process_word
+ ****************************************************************************/
+
+int audio_capture_process_word(audio_word_fn_t fn, void *arg)
+{
+  const int16_t *word;
+  int nsamples = 0;
+  int ret;
+
+  if (fn == NULL)
+    {
+      return -EINVAL;
+    }
+
+  if (!g_dsp_on)
+    {
+      return -EAGAIN;
+    }
+
+  pthread_mutex_lock(&g_dsp_lock);
+
+  if (!g_word_pending)
+    {
+      pthread_mutex_unlock(&g_dsp_lock);
+      return 0;
+    }
+
+  word = dsp_vad_word(&nsamples);
+  if (word == NULL || nsamples <= 0)
+    {
+      g_word_pending = false;
+      g_dsp_skipped  = 0;
+      pthread_mutex_unlock(&g_dsp_lock);
+      return 0;
+    }
+
+  /* Release the lock for the callback.
+   *
+   * This is safe because feeding is already gated off by g_word_pending, so
+   * the VAD cannot touch `word` while we are using it, and g_word_peeked
+   * stops capture_cb()'s auto-drop from firing underneath us.  The point of
+   * not holding the lock is that fn() runs kws_recognize() (MFCC + DTW),
+   * which takes tens of milliseconds - blocking the capture thread for that
+   * long would risk an RX overrun.
+   */
+
+  g_word_peeked = true;
+  pthread_mutex_unlock(&g_dsp_lock);
+
+  ret = fn(word, nsamples, arg);
+
+  pthread_mutex_lock(&g_dsp_lock);
+
+  (void)dsp_vad_take_word(NULL, 0);   /* clears ready, keeps the noise floor */
+  g_word_pending = false;
+  g_word_peeked  = false;
+  g_dsp_skipped  = 0;
 
   pthread_mutex_unlock(&g_dsp_lock);
   return ret;
