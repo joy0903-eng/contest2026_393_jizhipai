@@ -332,7 +332,25 @@ void dsp_vad_deinit(void)
       s_word = NULL;
     }
 
-  s_vad_ready = 0;
+  /* Invalidate the endpointing state BEFORE publishing "not ready".
+   *
+   * Rationale: dsp_vad_word() hands out the raw s_word pointer and gates
+   * it on s_word_ready (not on s_vad_ready).  If we only cleared
+   * s_vad_ready, a consumer already scheduled check could still observe
+   * s_word_ready != 0 after this point and hand out a pointer to freed
+   * memory (use-after-free).  Same for dsp_vad_take_word() and for the
+   * pre-roll/accumulator bookkeeping.  Clearing them here makes every
+   * accessor fail closed after deinit.
+   */
+
+  s_word_ready     = 0;
+  s_word_len       = 0;
+  s_word_ms        = 0;
+  s_capturing      = 0;
+  s_preroll_w      = 0;
+  s_preroll_n      = 0;
+  s_acc_len        = 0;
+  s_vad_ready      = 0;
 }
 
 /****************************************************************************
