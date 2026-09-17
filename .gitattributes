@@ -1,0 +1,25 @@
+# Patch files MUST keep LF endings.  A CRLF-converted patch is corrupted the
+# moment it reaches a Linux runner: `patch` sees every context line with a
+# trailing \r, refuses to match, and (with our fail-loud policy) aborts the
+# build.  Git on Windows would otherwise rewrite these on checkout/commit.
+*.patch  text eol=lf
+*.diff   text eol=lf
+
+# Shell/yaml/make text files: keep LF as well so CI never sees a \r.
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.sh     text eol=lf
+*.mk     text eol=lf
+Makefile text eol=lf
+Make.defs text eol=lf
+
+# defconfig is consumed by kconfig's parser; a stray \r becomes part of the
+# symbol value and silently breaks matching.
+defconfig    text eol=lf
+*defconfig   text eol=lf
+
+# Binary artifacts must never be touched.
+*.bin    binary
+*.elf    binary
+*.png    binary
+*.jpg    binary

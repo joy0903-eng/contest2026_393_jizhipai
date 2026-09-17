@@ -91,27 +91,55 @@ cd <openvela>
 #     → LLM API key (injected at build; NEVER commit plaintext)
 make menuconfig        # 仅当 build.sh 未进入 menuconfig 时；或先 unset 再配
 
-# 进入内核目录烧录
+# 进入内核目录烧录（SIMPLE_BOOT 单镜像，见 §4）
 cd nuttx
-make -j$(nproc) flash ESPTOOL_PORT=/dev/ttyACM0 ESPTOOL_BINDIR=./
+make -j$(nproc) flash ESPTOOL_PORT=/dev/ttyACM0
 ```
+
+> **SIMPLE_BOOT 说明**：本 BSP 使用 `CONFIG_ESPRESSIF_SIMPLE_BOOT=y`。此模式下
+> `tools/esp32s3/Config.mk` 会把 `ESPTOOL_BINDIR` **强制设为 `.`**，并只烧录
+> `0x0000 nuttx.bin` 这一个镜像（无需 bootloader / partition-table），因此
+> **不需要手动传 `ESPTOOL_BINDIR=./`**。请勿把 `nuttx.bin` 烧到 `0x10000`。
 
 > 构建机前置（详见 porting_plan.md §6）：真实 **Ubuntu 22.04**（VM/双系统/云，
 > **非 WSL/非 Docker**）、`repo`+Git LFS、`xtensa-esp32s3-elf-12.2.0`、≥40GB 磁盘。
 
 ---
 
-## 4. 本机烧录（Windows，已验证 esptool `default_reset`）
+## 4. 本机烧录（Windows，SIMPLE_BOOT 单镜像）
 
-固件构建完成后，在本机用已验证的 esptool 链路烧录（原生 USB-CDC，VID:PID=303A:1001）：
+本 BSP 启用了 `CONFIG_ESPRESSIF_SIMPLE_BOOT=y`（`tools/esp32s3/Config.mk` 的 SIMPLE_BOOT 分支）：
+`APP_OFFSET := 0x0000`，`ESPTOOL_BINS` 只含 `FLASH_APP`（即 `0x0000 nuttx.bin`）。
+这是一个**自包含单镜像**，镜像头就从 flash `0x0` 开始，**不需要第二级 bootloader，也不需要
+partition table**。固件构建完成后，在本机用已验证的 esptool 链路烧录（原生 USB-CDC，
+VID:PID=303A:1001）：
 
-```bat
-esptool.py --chip esp32s3 --port COMx --baud 921600 ^
-           --before default_reset --after hard_reset ^
-           write_flash 0x0 bootloader.bin 0x8000 partition-table.bin 0x10000 nuttx.bin
+**产物（构建时生成，只有一个文件）：**
+
+```bash
+# MKIMAGE 阶段（SIMPLE_BOOT 会带 --ram-only-header）
+esptool.py -c esp32s3 elf2image --ram-only-header -fs 16MB -fm dio -ff 40m \
+           -o nuttx.bin nuttx
 ```
 
-或使用构建产出的合并镜像（如 `nuttx.merged.bin`）一次性烧录。串口工具 115200 可看到 `nsh>`。
+**烧录（单镜像烧到 0x0）：**
+
+```bat
+esptool --chip esp32s3 --port COM4 --baud 921600 ^
+        --before default_reset --after hard_reset ^
+        write-flash -z --flash-mode dio --flash-size 16MB 0x0 nuttx.bin
+```
+
+> ⚠️ **SIMPLE_BOOT 下不要烧 bootloader、不要烧 partition-table，也不要把
+> `nuttx.bin` 烧到 `0x10000`。** 三段式（`0x0 bootloader.bin 0x8000
+> partition-table.bin 0x10000 nuttx.bin`）是 `APP_FORMAT_LEGACY` 时代的做法；在
+> SIMPLE_BOOT 下照做会让芯片在 `0x10000` 找不到 app、在 `0x8000` 找不到不存在的
+> 分区表，**直接黑屏无输出**。
+>
+> 同理，`merge_bin` / `nuttx.merged.bin` 的合并流程在 SIMPLE_BOOT 下也不是必需的
+> （那不是本文档要求的烧录路径），请直接用上面的单镜像 `write-flash`。
+
+串口工具 115200 可看到 `nsh>`。
 
 ---
 
@@ -124,11 +152,17 @@ esptool.py --chip esp32s3 --port COMx --baud 921600 ^
 2. **ES8311 Codec 驱动符号**：`CONFIG_AUDIO_ES8311`（或 `CONFIG_AUDIO_ESP32S3_ES8311`）
    需在当前树 `menuconfig` 中确认并启用；`es8311_initialize()` 入参顺序亦依树版本核对。
 3. **LCD 色序 / 旋转**：ST7789 为 RGB 还是 BGR、面板旋转方向，需真机实测（§3.3/§3.4）。
-4. **USB-CDC 控制台**：确认 `CONFIG_ESP32S3_USBSERIAL` + `CONFIG_CDCACM_CONSOLE` 组合
-   在目标树能输出 `nsh>`（VID:PID 303A:1001）。
+4. **USB-CDC 控制台**：确认 `CONFIG_ESP32S3_USBSERIAL` 在目标树能输出 `nsh>`（内置
+   **USB-Serial-JTAG**，VID:PID 303A:1001）。注意：该驱动是 `esp32s3_usbserial.c`，
+   经 `esp32s3_config.h` 定义 `CONSOLE_DEV = g_uart_usbserial`，由 `xtensa_serialinit()`
+   注册 `/dev/console` 与 `/dev/ttyACM0`；它**不是** `CONFIG_CDCACM_CONSOLE`（那是
+   硬件 USB-OTG 外设路径）。另：该控制台在 `nx_start()` **之前**不会 attach，早期
+   启动失败时串口为 0 字节属预期（详见故障定位笔记）。
 5. **电池 ADC**：分压比 / mV-per-LSB 未给，需标定（board.h `BOARD_BAT_ADC_*`）。
 6. **TLS**：LLM/天气为 HTTPS，需 `mbedTLS` + `CONFIG_NETUTILS_WEBCLIENT` TLS 支持。
-7. **NVS 分区**：待办存储依赖 NVS，需在分区表定义 NVS 区并启用 `CONFIG_NVS_ENABLED`。
+7. **NVS 存储**：待办存储依赖 NVS，启用 `CONFIG_NVS_ENABLED`。注意本 BSP 为
+   **SIMPLE_BOOT 单镜像**，flash 上没有分区表；NVS 区地址/大小需在 defconfig 中显式
+   指定（不依赖 `partition-table.bin` 里解析出来的偏移）。
 8. **RMT / LEDC 接口**：`ai_vox3_ws2812.c`、`ai_vox3_servo.c` 所用 arch 函数名（如
    `esp32s3_rmt_tx_init` / `esp32s3_ledc_set_timer`）依目标树头文件核对。
 

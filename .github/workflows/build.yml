@@ -115,6 +115,48 @@ jobs:
           ls -la openvela/vendor/espressif/boards/esp32s3/common/scripts
           # Keep the configs stub that configure's process_config.sh references.
           mkdir -p openvela/vendor/espressif/boards/esp32s3/common/configs
+          # ------------------------------------------------------------------
+          # NUTTX SOURCE PATCH MECHANISM.
+          # `openvela/nuttx` is a repo-sync FETCH result from upstream
+          # (manifest: <project path="nuttx" name="nuttx">) -- it is NOT part of
+          # our team repo, so a fix to a nuttx file cannot be delivered by
+          # simply committing it here.  This step is the patch seam: every
+          # `*.patch` under staging/patches/ is applied to the synced tree with
+          # `patch -p1` right after sync and before the build.  Idempotent:
+          # if the change is already present (dry-run says so) we skip it.
+          # Fail loud if a patch is neither applicable nor already applied --
+          # a silently-dropped fix is worse than a red build.
+          # ------------------------------------------------------------------
+          PATCHDIR="$PWD/team_repo/staging/patches"
+          if [ -d "$PATCHDIR" ]; then
+            shopt -s nullglob
+            for p in "$PATCHDIR"/*.patch; do
+              echo "== NUTTX PATCH: $p =="
+              if (cd openvela/nuttx && patch -p1 --dry-run --forward < "$p" >/dev/null 2>&1); then
+                (cd openvela/nuttx && patch -p1 --forward < "$p") \
+                  || { echo "== NUTTX PATCH APPLY FAILED: $p =="; exit 1; }
+                echo "applied: $p"
+              elif (cd openvela/nuttx && patch -p1 --dry-run --reverse < "$p" >/dev/null 2>&1); then
+                echo "already applied, skipping: $p"
+              else
+                echo "== NUTTX PATCH NOT APPLICABLE: $p =="
+                exit 1
+              fi
+            done
+            shopt -u nullglob
+          else
+            echo "no staging/patches directory -- no nuttx patches to apply"
+          fi
+          # Prove the patch landed: the size-override must be present in the
+          # synced source the compiler will read.
+          if grep -q 'app_irom_size = segment_hdr.data_len;' \
+               openvela/nuttx/arch/xtensa/src/common/espressif/esp_loader.c; then
+            echo "PATCH VERIFY OK: map_rom_segments size override is in the tree"
+          else
+            echo "== PATCH VERIFY FAILED: esp_loader.c size override missing =="
+            echo "   (the IllegalInstruction workaround did NOT land -- do not flash this build)"
+            exit 1
+          fi
           echo "BSP+应用已就位"
           echo "--- apps/examples/Kconfig ---"
           cat openvela/apps/examples/Kconfig
@@ -283,8 +325,43 @@ jobs:
             set +e
             set -o pipefail
             rc=127
+            # ------------------------------------------------------------------
+            # MKIMAGE forensics: prove whether --ram-only-header is really on
+            # the elf2image command line.  tools/esp32s3/Config.mk builds
+            # ELF2IMAGE_OPTS conditionally on CONFIG_ESPRESSIF_SIMPLE_BOOT; if
+            # that symbol is off, the flag is dropped.  run52's image has
+            # segcount=5 with a DROM+IROM segment visible in the header, which
+            # is what a NON-ram-only image looks like -- so we need the actual
+            # file and the actual variable definitions in the log.
+            # Real path after `repo sync` (manifest: <project path="nuttx"
+            # name="nuttx">, file inside it at tools/esp32s3/Config.mk).
+            # ------------------------------------------------------------------
+            echo "== MKIMAGE opts as seen by make ==" >> build.log
+            found_cfg=""
+            for p in \
+                nuttx/tools/esp32s3/Config.mk \
+                nuttx/../vendor/espressif/tools/esp32s3/Config.mk
+            do
+              if [ -f "$p" ]; then
+                echo "-> found Config.mk at: $p" >> build.log
+                found_cfg="$p"
+                break
+              fi
+            done
+            if [ -n "$found_cfg" ]; then
+              grep -nE 'ELF2IMAGE_OPTS|ESPTOOL_FLASH_OPTS|ram-only-header|ESPTOOL_FLASH_OPTS|MKIMAGE' \
+                "$found_cfg" >> build.log 2>&1 || true
+            else
+              echo "Config.mk not found at nuttx/tools/esp32s3/Config.mk" >> build.log
+            fi
+            echo "== SIMPLE_BOOT symbol as the build sees it ==" >> build.log
+            grep -nE 'ESP32S3_APP_FORMAT|ESPRESSIF_SIMPLE_BOOT' nuttx/.config >> build.log 2>&1 || true
             m -j"$(nproc)" 2>&1 | tee -a build.log
             rc=$?
+            # Capture the EXACT elf2image invocation (post-expansion) so we can
+            # see --ram-only-header present or absent.
+            echo "== elf2image command line (from make's own output) ==" >> build.log
+            grep -nE 'elf2image' build.log >> build.log 2>&1 || true
             echo "M-CHAIN rc=$rc" >> build.log
             ls -la nuttx/nuttx nuttx/nuttx.bin >> build.log 2>&1
             echo "$rc" > build_rc.txt
@@ -340,6 +417,16 @@ jobs:
           find nuttx -name '*.bin' -exec ls -la {} \; > binlist.txt 2>&1 || true
           tail -c 3000 binlist.txt || true
           find nuttx -name 'nuttx.bin' -exec cp -v {} firmware/ \; 2>/dev/null || true
+          # ELF + map: without these, a crash PC can only be disassembled and
+          # guessed at -- with nuttx.map (or the ELF) we can run
+          #   xtensa-esp32s3-elf-addr2line -e nuttx <PC>
+          # and land on the exact source line.  Ship them with the firmware.
+          find nuttx -maxdepth 1 -name 'nuttx'     -exec cp -v {} firmware/ \; 2>/dev/null || true
+          find nuttx -maxdepth 1 -name 'nuttx.map' -exec cp -v {} firmware/ \; 2>/dev/null || true
+          # Self-describing artifact: sha256 + segment structure.  If the board
+          # ever behaves differently from what this says, the problem is
+          # downstream of CI.
+          sha256sum nuttx/nuttx.bin > firmware/nuttx.bin.sha256 2>/dev/null || true
           cp -v binlist.txt firmware/ 2>/dev/null || true
           # The Publish step runs only on success and the logs branch only on
           # failure, so ship the build.log tail WITH the firmware itself

@@ -1,0 +1,60 @@
+Fix map_rom_segments(): override IROM/DROM region size from the image header
+
+arch/xtensa/src/common/espressif/esp_loader.c
+
+WHY
+---
+`map_rom_segments()` parses the ESP32-S3 application image in flash to find the
+real flash offset of the XIP segments (the linker's `_image_*_lma` values are
+only valid before `elf2image` rewrites the layout).  For the SIMPLE_BOOT path
+it correctly rewrites `app_irom_start` / `app_drom_start` from the on-flash
+segment header, and it rewrites the *aligned bases* -- but it never rewrites
+the *sizes*.  So `app_irom_size` / `app_drom_size` keep the caller's values,
+which come from the linker symbols `_image_irom_size` /
+`_image_drom_size` (`esp32s3_start.c`: `app_irom_size = (uint32_t)_image_irom_size;`).
+
+Those linker sizes are the *pre-elf2image* section sizes and are NOT equal to
+the segment length actually stored in flash:
+
+  run52/nuttx.bin (745904 bytes, segcount=5):
+    IROM segment (load_addr 0x42000020): header data_len = 0x8FEBC (589500)
+      but _image_irom_size                        = 0x9FEB9 (655033)
+      -> over-map by 0xFFFD (~64 KiB)
+
+Over-reporting the mapped length makes `mmu_hal_map_region()` pin MMU pages
+past the end of the segment, and `cache_ll_l1_get_bus()` computes a bus mask
+for a region larger than what actually exists -- both feed the XIP window with
+addresses that do not correspond to real flashed code/data.  The observed
+`IllegalInstruction` at PC=0x4200692e (fetch succeeds, decode fails) is
+consistent with an XIP region whose contents/length do not match what the CPU
+expects.
+
+FIX
+---
+`esp_image_segment_header_t.data_len` is defined as "Length of data"
+(esp_app_format.h: `uint32_t data_len;`) and the ROM/IDF image loader treats it
+as exactly the number of segment bytes stored in flash (esp_image_format.c:
+`next_addr += header->data_len;`).  We therefore overwrite the region size with
+`segment_hdr.data_len` in BOTH the DROM and IROM hit branches, mirroring the
+existing `app_*_start` rewrite.
+
+--- a/arch/xtensa/src/common/espressif/esp_loader.c
++++ b/arch/xtensa/src/common/espressif/esp_loader.c
+@@ -227,15 +227,17 @@ int map_rom_segments(uint32_t app_drom_start, uint32_t app_drom_vaddr,
+       if (IS_DROM(segment_hdr.load_addr) &&
+           segment_hdr.load_addr == (uint32_t)_image_drom_vma)
+         {
+           app_drom_start = offset + sizeof(esp_image_segment_header_t);
+           app_drom_start_aligned = app_drom_start & MMU_FLASH_MASK;
++          app_drom_size = segment_hdr.data_len;
+           rom_segments++;
+         }
+ 
+       if (IS_IROM(segment_hdr.load_addr) &&
+           segment_hdr.load_addr == (uint32_t)_image_irom_vma)
+         {
+           app_irom_start = offset + sizeof(esp_image_segment_header_t);
+           app_irom_start_aligned = app_irom_start & MMU_FLASH_MASK;
++          app_irom_size = segment_hdr.data_len;
+           rom_segments++;
+         }
