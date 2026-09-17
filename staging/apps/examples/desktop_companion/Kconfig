@@ -37,4 +37,24 @@ config EXAMPLES_DESKTOP_COMPANION
       Selects the smart-home backend. The default "none" makes
       smart_home_control() parse intent and return "unconfigured".
 
+  config AIVOX3_KWS_STORE_PATH
+    string "Offline wake-word template storage path"
+    default "/mnt/sd0/wake.bin"
+    ---help---
+      POSIX path used by kws_save()/kws_load() to persist the DTW template
+      bank. It MUST point into a writable, mounted filesystem (FAT on the
+      SD card or on a SPI-flash partition). This board config currently
+      enables no writable filesystem, so kws_save() will report -ENOENT
+      until one is mounted; templates then live in RAM only.
+
+  config AIVOX3_KWS_THRESHOLD
+    int "Default DTW decision threshold (0 = wait for calibration)"
+    default 2400
+    ---help---
+      Normalized DTW distance below which an utterance is accepted. 2400 is
+      the value measured on the Arduino reference firmware after recording
+      "ni hao, openvela" three times; it transfers directly because the
+      front-end geometry, feature scaling and distance metric are identical.
+      Set 0 to require kws_learn() to calibrate a threshold first.
+
   endif

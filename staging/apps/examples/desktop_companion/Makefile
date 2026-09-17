@@ -22,7 +22,8 @@ STACKSIZE = CONFIG_DEFAULT_TASK_STACKSIZE
 # Source files
 MAINSRC  = main.c
 CSRCS    = ui_lvgl.c net_services.c llm_client.c http_util.c \
-           audio_pipeline.c face_follow.c smart_home.c
+           audio_pipeline.c pcm_stream.c face_follow.c smart_home.c \
+           dsp_vad.c dsp_mfcc.c kws_engine.c
 
 # Include path (this directory holds the local headers)
 CFLAGS  += ${INCDIR}

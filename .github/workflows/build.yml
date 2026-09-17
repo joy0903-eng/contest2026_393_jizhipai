@@ -591,8 +591,7 @@ jobs:
           fi
           size="$(stat -c%s nuttx/nuttx.bin)"
           # ------------------------------------------------------------------
-          # BOOTABILITY GATE (2026-09-17, REVISED -- the original segment-count
-          # judgement was WRONG and is corrected below).
+          # BOOTABILITY GATE (2026-09-17, REVISED AGAIN -- esptool is the judge).
           #
           # Everything above only proves that *an* ESP32-S3 image was produced.
           # It does not prove the image can boot.  The real-device fact is:
@@ -602,99 +601,93 @@ jobs:
           #                                serial produced 0 bytes)
           #   a healthy image          ->  boots normally
           #
-          # The ORIGINAL gate hard-required segcount == 5.  run#68 disproved
-          # that: it built SIX segments (two of them load_addr==0 padding
-          # segments emitted by NuttX's own esp_loader.c -- `#define
-          # IS_PADD(addr) (addr == 0)`) yet carried the full IROM/DROM set, so
-          # it is structurally healthy and was blocked only by a coincidence of
-          # segment arithmetic.  Segment COUNT is not the predictor; whether a
-          # ROM-visible (flash-mapped) segment exists at all is.
+          # HISTORY OF WRONG JUDGEMENTS (both disproved -- do not reintroduce):
+          #   1) "segcount == 5" -- run#68 drew SIX segments (two load_addr==0
+          #      PADDING segments emitted by NuttX's own esp_loader.c,
+          #      `#define IS_PADD(addr) (addr == 0)`) yet was structurally
+          #      healthy.  Segment COUNT is not the predictor.
+          #   2) "classify load_addr against a hand-written map" -- a
+          #      hand-rolled window table mislabelled the ESP32-S3 DRAM window
+          #      0x3FC80000-0x3FD00000 as "DROM-low".  It is NOT DROM: esptool
+          #      reports every 0x3fc8.. / 0x3fc9.. segment (run#52 0x3fca7230,
+          #      run#55/67/68 0x3fc9xxxx) as [BYTE_ACCESSIBLE,MEM_INTERNAL,DRAM].
+          #      That mislabel made run#55/67 (the black-screen images) look like
+          #      they had a DROM and only failed by luck on the IROM check.
+          #      NEVER hand-write a chip memory map -- ask esptool.
           #
-          # A zero-IROM/DROM image is the signature of `elf2image
-          # --ram-only-header`, which tools/esp32s3/Config.mk emits whenever
-          # CONFIG_ESPRESSIF_SIMPLE_BOOT=y.  Its tool output literally says
-          # "Image has only RAM segments visible. ROM segments are hidden."
-          # A ROM bootloader that cannot see any segment to XIP-map refuses to
-          # hand over, which is the black screen / zero serial bytes the user
-          # reported.  The nuttx patch 0002 exists to drop that flag, but if
-          # the patch loop silently fails to run we would ship a perfectly
+          # THE JUDGE: `esptool image_info` prints each segment with its OFFICIAL
+          # per-chip type token from esptool's own segment definitions:
+          # [IROM] / [DROM] / [PADDING] / [MEM_INTERNAL,IRAM] /
+          # [BYTE_ACCESSIBLE,MEM_INTERNAL,DRAM].  We require:
+          #   (a) >= 1 [IROM] segment AND >= 1 [DROM] segment  (a flash-mapped
+          #       ROM-visible segment must exist for the ROM to XIP-map)
+          #   (b) a `Validation Hash: ... (valid)` line.  A --ram-only-header
+          #       image omits the SHA256 appended digest entirely, so esptool
+          #       prints NO Validation Hash line (run#55/67) -- this is the
+          #       DIRECT fingerprint of --ram-only-header, stronger than any
+          #       segment count because it checks the image trailer.
+          # If the esptool call itself fails (rc != 0), the gate FAILS -- a
+          # broken tool must never let an unproven image through.
+          #
+          # A --ram-only-header image is what tools/esp32s3/Config.mk emits
+          # whenever CONFIG_ESPRESSIF_SIMPLE_BOOT=y; its tool output literally
+          # says "Image has only RAM segments visible. ROM segments are
+          # hidden."  The ROM bootloader then has no segment to XIP-map and
+          # refuses to hand over -> the black screen / zero serial bytes the
+          # user reported.  The nuttx patch 0002 exists to drop that flag, but
+          # if the patch loop silently fails to run we would ship a perfectly
           # "green" build that bricks.
           #
-          # So: refuse to publish anything whose segment table lacks at least
-          # one external-flash IROM segment AND at least one DROM segment.
+          # Ground-truth esptool classifications (the runner installs esptool
+          # 4.8.1 above; the invocation below matches that, `python3 -m esptool`):
           #
-          # Measured segment tables (ground truth, parsed byte-by-byte):
-          #
-          #   run#52 (boots OK, segcount=5):
-          #     seg0 la=0x3c090020 len=112560  DROM (flash data)
-          #     seg1 la=0x3fca7230 len=11520   DROM-low
-          #     seg2 la=0x40374000 len=6968    IRAM
-          #     seg3 la=0x42000020 len=589500  IROM (flash code)
-          #     seg4 la=0x40375b38 len=25248   IRAM
-          #
-          #   run#67 (BLACK SCREEN, 0 serial bytes, segcount=2):
-          #     seg0 la=0x3fc9a350 len=11884   IRAM-area only
-          #     seg1 la=0x40374000 len=44644   IRAM
-          #     -> no IROM, no flash-mapped DROM == --ram-only-header fingerprint
-          #
-          #   run#68 (segcount=6; contains padding, still healthy):
-          #     seg0 la=0x3fc9b180 len=11916   DROM-low
-          #     seg1 la=0x40374000 len=48148   IRAM
-          #     seg2 la=0x00000000 len=5416    PADD (load_addr==0)
-          #     seg3 la=0x3c010000 len=113016  DROM (flash data)
-          #     seg4 la=0x00000000 len=18040   PADD (load_addr==0)
-          #     seg5 la=0x42040000 len=590976  IROM (flash code)
-          #
-          # esp_image_header_t (0x18 variant): byte[1] = segment count,
-          # byte[4..8] = entry point (little-endian), segment table at 0x18,
-          # each entry = load_addr(LE u32) + data_len(LE u32), segment data
-          # immediately follows the 8-byte entry.
+          #   run#52 (boots OK, 5 seg): [DROM] 0x3c090020, [DRAM] 0x3fca7230,
+          #     [IRAM] 0x40374000, [IROM] 0x42000020, [IRAM] 0x40375b38
+          #     + Validation Hash: (valid)
+          #   run#67 (BLACK SCREEN, 2 seg): [DRAM] 0x3fc9a350, [IRAM] 0x40374000
+          #     -- no IROM, no DROM, NO Validation Hash line
+          #   run#68 (6 seg, healthy): [DRAM] 0x3fc9b180, [IRAM] 0x40374000,
+          #     [PADDING] 0x0, [DROM] 0x3c010000, [PADDING] 0x0, [IROM] 0x42040000
+          #     + Validation Hash: (valid)
           # ------------------------------------------------------------------
-          segcount="$(od -An -tu1 -j1 -N1 nuttx/nuttx.bin | tr -d ' \n')"
-          entry="$(od -An -tx4 -j4 -N4 nuttx/nuttx.bin | tr -d ' \n')"
-          # Walk the segment table and classify each load_addr:
-          #   IROM      0x42000000..0x42800000  (external-flash code window)
-          #   DROM      0x3C000000..0x3E000000  (external-flash data window)
-          #   DROM-low  0x3F400000..0x3F800000  and 0x3FC80000..0x3FD00000
-          #   padding   la == 0 (stay put, ignore)
-          #   IRAM/DRAM 0x40370000-0x40380000 / 0x3FF00000-0x40000000 (ignore)
-          bin_size="$(stat -c%s nuttx/nuttx.bin)"
-          seg_off=24; irom=0; drom=0; seg_i=0
-          while [ "$seg_i" -lt "$segcount" ]; do
-            if [ "$seg_off" -ge "$bin_size" ]; then
-              echo "SEGCOUNT GATE: segment walk ran past EOF at offset $seg_off" >> build.log
-              break
-            fi
-            la_hex="$(od -An -tx4 -j$seg_off -N4 nuttx/nuttx.bin | tr -d ' \n')"
-            dl_dec="$(od -An -tu4 -j$((seg_off+4)) -N4 nuttx/nuttx.bin | tr -d ' \n')"
-            la_dec=$((16#$la_hex))
-            if [ "$la_dec" -ge $((16#42000000)) ] && [ "$la_dec" -lt $((16#42800000)) ]; then
-              irom=$((irom+1))
-            fi
-            if { [ "$la_dec" -ge $((16#3C000000)) ] && [ "$la_dec" -lt $((16#3E000000)) ]; } || \
-               { [ "$la_dec" -ge $((16#3F400000)) ] && [ "$la_dec" -lt $((16#3F800000)) ]; } || \
-               { [ "$la_dec" -ge $((16#3FC80000)) ] && [ "$la_dec" -lt $((16#3FD00000)) ]; }; then
-              drom=$((drom+1))
-            fi
-            seg_off=$((seg_off + 8 + dl_dec))
-            seg_i=$((seg_i+1))
-          done
-          echo "SEGCOUNT GATE: nuttx.bin segcount=$segcount entry_le=0x$entry irom=$irom drom=$drom" >> build.log
-          if [ "$irom" -lt 1 ] || [ "$drom" -lt 1 ]; then
-            echo "== BUILD FAILED: BOOTABILITY GATE -- no ROM-visible segment ==" >> build.log
-            echo "   segcount=$segcount irom=$irom drom=$drom.  A bootable image must" >> build.log
-            echo "   contain at least one IROM (0x42000000-0x42800000) and at least" >> build.log
-            echo "   one DROM (0x3C000000-0x3E000000 / 0x3F40-0x3F80 / 0x3FC8-0x3FD0)" >> build.log
-            echo "   segment.  Zero flash-mapped segments is the --ram-only-header" >> build.log
-            echo "   fingerprint (run#67: 2 all-RAM segments produced 0 serial bytes)." >> build.log
+          # Invoke esptool exactly as the rest of this workflow does
+          # (`python3 -m esptool`, esptool 4.8.1 installed earlier); fall back
+          # to a bare esptool.py if the module form is unavailable.
+          # NOTE: GitHub runs `run:` blocks under `bash -e`, so a bare
+          # `x="$(cmd)"; rc=$?` would abort on a non-zero cmd before we can
+          # read rc.  Use the `|| rc=$?` idiom so -e never trips here and the
+          # gate decides for itself (a dead tool must FAIL the gate, not skip).
+          esptool_info=""
+          esptool_rc=0
+          esptool_info="$(python3 -m esptool --chip esp32s3 image_info nuttx/nuttx.bin 2>&1)" || esptool_rc=$?
+          if [ "$esptool_rc" -ne 0 ]; then
+            esptool_info="$(esptool.py --chip esp32s3 image_info nuttx/nuttx.bin 2>&1)" || esptool_rc=$?
+          fi
+          echo "== BOOTABILITY GATE: esptool image_info (rc=$esptool_rc) ==" >> build.log
+          printf '%s\n' "$esptool_info" >> build.log
+          irom="$(printf '%s\n' "$esptool_info" | grep -c '\[IROM\]')" || true
+          drom="$(printf '%s\n' "$esptool_info" | grep -c '\[DROM\]')" || true
+          vhash="$(printf '%s\n' "$esptool_info" | grep -c 'Validation Hash:.*(valid)')" || true
+          echo "BOOTABILITY GATE: esptool_rc=$esptool_rc irom=$irom drom=$drom validation_hash=$vhash" >> build.log
+          if [ "$esptool_rc" -ne 0 ] || [ "${irom:-0}" -lt 1 ] || [ "${drom:-0}" -lt 1 ] || [ "${vhash:-0}" -lt 1 ]; then
+            echo "== BUILD FAILED: BOOTABILITY GATE -- image not provably bootable ==" >> build.log
+            echo "   esptool_rc=$esptool_rc irom=$irom drom=$drom validation_hash=$vhash." >> build.log
+            echo "   A bootable image needs >=1 [IROM], >=1 [DROM] and a" >> build.log
+            echo "   'Validation Hash: ... (valid)' line (esptool's own per-chip" >> build.log
+            echo "   segment classification -- do NOT hand-write address windows)." >> build.log
+            echo "   Missing IROM/DROM or a missing Validation Hash is the" >> build.log
+            echo "   --ram-only-header fingerprint (run#55/67: 2 all-RAM segments," >> build.log
+            echo "   valid Checksum but NO Validation Hash, 0 serial bytes)." >> build.log
             echo "   Most likely --ram-only-header is still in" >> build.log
             echo "   nuttx/tools/esp32s3/Config.mk, meaning staging/patches/0002-*" >> build.log
             echo "   did not apply.  Check the 'NUTTX PATCH' lines in bsp.log; if none" >> build.log
             echo "   appear, the patch loop never executed and the PATCH CHECK gate" >> build.log
             echo "   was skipped with it." >> build.log
+            echo "   --- esptool image_info output follows ---" >> build.log
+            printf '%s\n' "$esptool_info" >> build.log
             exit 1
           fi
-          echo "BUILD OK: nuttx/nuttx.bin present (${size} bytes, magic 0xE9, m rc=$rc, segcount=$segcount, irom=$irom drom=$drom, entry=0x$entry)" >> build.log
+          echo "BUILD OK: nuttx/nuttx.bin present (${size} bytes, magic 0xE9, m rc=$rc, irom=$irom drom=$drom vhash=$vhash)" >> build.log
           ls -la nuttx/nuttx nuttx/nuttx.bin >> build.log 2>&1
 
       - name: Collect firmware
@@ -762,63 +755,68 @@ jobs:
             ls -la nuttx/nuttx.bin 2>/dev/null || echo "  MISSING"
           } >> firmware/build_tail.log
           echo "== Collect: SEGMENT TABLE (bootability gate) =="
-          # 2026-09-17 real-device A/B, REVISED.  The original note claimed
-          # "segment count is the single best predictor" and hard-required
-          # segcount == 5.  That was a misreading of the A/B:
-          #   run#67 (black screen, 0 serial bytes): 2 segments, ALL RAM -- zero
-          #     IROM/DROM, i.e. elf2image --ram-only-header.
-          #   run#52 (boots cleanly): 5 segments, 1x IROM + 2x DROM.
-          #   run#68 (segcount=6, blocked by the old gate): 1x IROM + 2x DROM
-          #     PLUS two load_addr==0 padding segments.  Fully healthy.
-          # The real predictor is "does the segment table contain any ROM-
-          # visible (flash-mapped) segment at all", not the raw count.
-          # esp_image_header_t (0x18 variant): byte[1] = segment count,
-          # byte[4..8] = entry point (little-endian), segment table at 0x18;
-          # each entry is load_addr(LE u32) + data_len(LE u32).
-          segcount=$(od -An -tu1 -j1 -N1 nuttx/nuttx.bin 2>/dev/null | tr -d ' \n')
-          entry=$(od -An -tx4 -j4 -N4 nuttx/nuttx.bin 2>/dev/null | tr -d ' \n')
-          echo "nuttx.bin segcount=$segcount entry_le=0x$entry"
-          bin_size=$(stat -c%s nuttx/nuttx.bin 2>/dev/null)
-          [ -n "$bin_size" ] || bin_size=0
-          seg_off=24; irom=0; drom=0; seg_i=0
-          while [ "$seg_i" -lt "$segcount" ]; do
-            if [ "$seg_off" -ge "$bin_size" ]; then
-              echo "   (segment walk ran past EOF at offset $seg_off)"
-              break
-            fi
-            la_hex=$(od -An -tx4 -j$seg_off -N4 nuttx/nuttx.bin 2>/dev/null | tr -d ' \n')
-            dl_dec=$(od -An -tu4 -j$((seg_off+4)) -N4 nuttx/nuttx.bin 2>/dev/null | tr -d ' \n')
-            la_dec=$((16#$la_hex))
-            if [ "$la_dec" -ge $((16#42000000)) ] && [ "$la_dec" -lt $((16#42800000)) ]; then
-              irom=$((irom+1))
-            fi
-            if { [ "$la_dec" -ge $((16#3C000000)) ] && [ "$la_dec" -lt $((16#3E000000)) ]; } || \
-               { [ "$la_dec" -ge $((16#3F400000)) ] && [ "$la_dec" -lt $((16#3F800000)) ]; } || \
-               { [ "$la_dec" -ge $((16#3FC80000)) ] && [ "$la_dec" -lt $((16#3FD00000)) ]; }; then
-              drom=$((drom+1))
-            fi
-            seg_off=$((seg_off + 8 + dl_dec))
-            seg_i=$((seg_i+1))
-          done
-          echo "segment table: irom=$irom drom=$drom (need >=1 each)"
-          echo "segcount=$segcount" > segcount.txt
-          echo "entry_le=0x$entry" >> segcount.txt
-          echo "irom=$irom" >> segcount.txt
-          echo "drom=$drom" >> segcount.txt
-          if [ "$irom" -lt 1 ] || [ "$drom" -lt 1 ]; then
-            echo "== BOOTABILITY GATE FAILED: missing ROM-visible segment =="
-            echo "   segcount=$segcount irom=$irom drom=$drom; a bootable image needs"
-            echo "   >=1 IROM (0x42000000-0x42800000) and >=1 DROM (0x3C000000-"
-            echo "   0x3E000000 / 0x3F40-0x3F80 / 0x3FC8-0x3FD0).  Zero flash-mapped"
-            echo "   segments is the --ram-only-header fingerprint (run#67: 2 all-RAM"
-            echo "   segments = 0 serial bytes, verified on hardware 2026-09-17)."
+          # 2026-09-17 real-device A/B, REVISED AGAIN -- esptool is the judge.
+          # TWO earlier judgements were WRONG:
+          #   1) "segcount == 5": run#68 drew 6 segments (two load_addr==0
+          #      PADDING segments) yet was healthy -- count is not the predictor.
+          #   2) hand-written address windows: 0x3FC80000-0x3FD00000 was wrongly
+          #      called "DROM-low" -- it is DRAM.  esptool classifies every
+          #      0x3fc8.. / 0x3fc9.. segment as [BYTE_ACCESSIBLE,MEM_INTERNAL,
+          #      DRAM] (run#52 0x3fca7230, run#55/67/68 0x3fc9xxxx).  That
+          #      mislabel made the black-screen images look like they had a DROM.
+          #      NEVER hand-write a chip memory map -- ask esptool.
+          #
+          # Real A/B ground truth (esptool's official per-chip classification):
+          #   run#67 (black screen, 0 serial bytes): 2 segments
+          #     [BYTE_ACCESSIBLE,MEM_INTERNAL,DRAM] + [MEM_INTERNAL,IRAM]
+          #     -> no [IROM], no [DROM]; Checksum valid but NO Validation Hash
+          #        line == the --ram-only-header fingerprint.
+          #   run#52 (boots cleanly): [DROM],[DRAM],[IRAM],[IROM],[IRAM]
+          #     + Validation Hash: (valid).
+          #   run#68 (6 seg, healthy): [DRAM],[IRAM],[PADDING],[DROM],
+          #     [PADDING],[IROM] + Validation Hash: (valid).
+          # Gate: require >=1 [IROM] AND >=1 [DROM] AND a 'Validation Hash:
+          # ... (valid)' line.  If esptool itself fails (rc != 0), treat it as
+          # a gate failure (never pass an unproven image because a tool died).
+          # `|| rc=$?` idiom + `|| true` on grep keep this safe under `bash -e`
+          # (GitHub's default) so a non-zero status never aborts the step here.
+          esptool_info=""
+          esptool_rc=0
+          esptool_info="$(python3 -m esptool --chip esp32s3 image_info nuttx/nuttx.bin 2>&1)" || esptool_rc=$?
+          if [ "$esptool_rc" -ne 0 ]; then
+            esptool_info="$(esptool.py --chip esp32s3 image_info nuttx/nuttx.bin 2>&1)" || esptool_rc=$?
+          fi
+          echo "== esptool image_info (rc=$esptool_rc) =="
+          printf '%s\n' "$esptool_info"
+          irom="$(printf '%s\n' "$esptool_info" | grep -c '\[IROM\]')" || true
+          drom="$(printf '%s\n' "$esptool_info" | grep -c '\[DROM\]')" || true
+          vhash="$(printf '%s\n' "$esptool_info" | grep -c 'Validation Hash:.*(valid)')" || true
+          echo "esptool_rc=$esptool_rc irom=$irom drom=$drom validation_hash=$vhash (need >=1 each)"
+          { echo "esptool_rc=$esptool_rc"
+            echo "irom=$irom"
+            echo "drom=$drom"
+            echo "validation_hash=$vhash"
+            printf '%s\n' "$esptool_info"
+          } > segcount.txt
+          if [ "$esptool_rc" -ne 0 ] || [ "${irom:-0}" -lt 1 ] || [ "${drom:-0}" -lt 1 ] || [ "${vhash:-0}" -lt 1 ]; then
+            echo "== BOOTABILITY GATE FAILED: image not provably bootable =="
+            echo "   esptool_rc=$esptool_rc irom=$irom drom=$drom validation_hash=$vhash."
+            echo "   A bootable image needs >=1 [IROM], >=1 [DROM] and a"
+            echo "   'Validation Hash: ... (valid)' line (esptool's own per-chip"
+            echo "   segment classification -- do NOT hand-write address windows)."
+            echo "   Missing IROM/DROM or a missing Validation Hash is the"
+            echo "   --ram-only-header fingerprint (run#55/67: 2 all-RAM segments,"
+            echo "   valid Checksum but NO Validation Hash, 0 serial bytes,"
+            echo "   verified on hardware 2026-09-17)."
             echo "   Usual cause: --ram-only-header still present in"
             echo "   nuttx/tools/esp32s3/Config.mk because the nuttx patch loop"
             echo "   did not run.  See BSP SECTION 2/3 in bsp.log."
             echo "   NOT a hard failure here on purpose -- the verdict step decides,"
             echo "   so Collect still stages the binary for inspection."
+            echo "   --- esptool image_info output follows ---"
+            printf '%s\n' "$esptool_info"
           else
-            echo "BOOTABILITY GATE OK: irom=$irom drom=$drom (IROM+DROM present)"
+            echo "BOOTABILITY GATE OK: irom=$irom drom=$drom validation_hash=$vhash"
           fi
           cp -v segcount.txt firmware/ 2>&1 || true
           echo "== Collect: firmware/ contents =="
