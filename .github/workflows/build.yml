@@ -86,14 +86,62 @@ jobs:
       - name: Install AI-VOX3 BSP + app (validated staging layout, Make flow)
         id: bsp
         run: |
+          # ------------------------------------------------------------------
+          # run#58 POST-MORTEM -- WHY THIS STEP IS SO DEFENSIVE
+          # run#58 died here with `bsp: failure`, a bare step status, and NO
+          # output anywhere: not even the later patch loop's unconditional
+          # `echo "== NUTTX PATCH:"` ever appeared.  The abort was therefore in
+          # these first few lines, and it was SILENT.
+          #
+          # Mechanism (proved in toolchain/prove_l95.sh, results in
+          # toolchain/build/prove_result.txt):
+          #   A redirect (`>>`) into a directory that does not exist FAILS.
+          #   Under GitHub Actions' `bash -e` that is fatal, and when the
+          #   command also carries `2>/dev/null` the reason is discarded --
+          #   so the step dies printing nothing at all.
+          #   C1: parent dir exists, file missing -> rc=0 (>> auto-creates).
+          #   C2: parent dir MISSING                -> rc=1, NO OUTPUT.  <-- run#58
+          #   C3: same as C2 without 2>/dev/null     -> "No such file or directory".
+          #
+          # So every directory we are about to write into must be created (or
+          # proven to exist) BEFORE the first write, and no write may have its
+          # stderr suppressed.  We also emit SECTION markers so that if this
+          # step ever fails again, the log names the exact block.
+          # ------------------------------------------------------------------
+          echo "== BSP SECTION 1/3: staging copies =="
+          set -x
+          # `openvela/apps` comes from the `apps` repo that `repo sync` fetches;
+          # it is NOT part of our team repo.  Create the parents before any
+          # copy/write so a missing tree fails LOUD instead of silently.
+          mkdir -p openvela/apps/examples
+          mkdir -p openvela/vendor/espressif/boards/esp32s3
+          if [ ! -d openvela/apps/examples ]; then
+            echo "== BSP FATAL: openvela/apps/examples missing after mkdir -p =="
+            echo "   repo sync did not materialise the apps tree."
+            exit 1
+          fi
+          if [ ! -d openvela/nuttx ]; then
+            echo "== BSP FATAL: openvela/nuttx missing -- repo sync incomplete =="
+            exit 1
+          fi
+          set +x
           cp -r team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3 openvela/vendor/espressif/boards/esp32s3/ai_vox3
           cp -r team_repo/staging/apps/examples/desktop_companion openvela/apps/examples/desktop_companion
           # Register the app Kconfig with an ABSOLUTE source path — mirrors mkkconfig.sh
           # output exactly ("source \"<abs path>\": relative paths fail because $srctree
           # is unset when olddefconfig parses the apps tree (run#19 root cause).
-          mkdir -p openvela/apps/examples
+          #
+          # NOTE the carefully asymmetric guards below:
+          #   * the GREP keeps 2>/dev/null (it is a probe; its silence is intended)
+          #   * the REDIRECT must never suppress stderr, and its parent dir has
+          #     just been mkdir -p'd above.
+          if [ ! -d openvela/apps/examples ]; then
+            echo "== BSP FATAL: cannot register Kconfig, directory vanished =="
+            exit 1
+          fi
           grep -q 'desktop_companion' openvela/apps/examples/Kconfig 2>/dev/null \
             || echo "source \"${{ github.workspace }}/openvela/apps/examples/desktop_companion/Kconfig\"" >> openvela/apps/examples/Kconfig
+          echo "== BSP SECTION 1/3: staging copies DONE =="
           # Build registration ships as staging .../desktop_companion/Make.defs (official
           # per-example pattern; auto-included by apps/examples/Make.defs wildcard).
           cp -r team_repo/staging/vendor_espressif/boards/esp32s3/common openvela/vendor/espressif/boards/esp32s3/common
@@ -112,7 +160,8 @@ jobs:
           cp openvela/nuttx/boards/xtensa/esp32s3/common/scripts/*.ld \
              openvela/vendor/espressif/boards/esp32s3/common/scripts/ \
              || { echo "== LDSCRIPT COPY FAILED =="; exit 1; }
-          ls -la openvela/vendor/espressif/boards/esp32s3/common/scripts
+          # Diagnostic only -- must never be able to abort the step.
+          ls -la openvela/vendor/espressif/boards/esp32s3/common/scripts || true
           # Keep the configs stub that configure's process_config.sh references.
           mkdir -p openvela/vendor/espressif/boards/esp32s3/common/configs
           # ------------------------------------------------------------------
@@ -128,18 +177,24 @@ jobs:
           # a silently-dropped fix is worse than a red build.
           # ------------------------------------------------------------------
           PATCHDIR="$PWD/team_repo/staging/patches"
+          echo "== BSP SECTION 2/3: nuttx patch loop (PATCHDIR=$PATCHDIR) =="
           if [ -d "$PATCHDIR" ]; then
             shopt -s nullglob
             for p in "$PATCHDIR"/*.patch; do
-              echo "== NUTTX PATCH: $p =="
+              echo "== NUTTX PATCH: $(basename "$p") =="
               if (cd openvela/nuttx && patch -p1 --dry-run --forward < "$p" >/dev/null 2>&1); then
                 (cd openvela/nuttx && patch -p1 --forward < "$p") \
-                  || { echo "== NUTTX PATCH APPLY FAILED: $p =="; exit 1; }
-                echo "applied: $p"
+                  || { echo "== NUTTX PATCH APPLY FAILED: $(basename "$p") =="; exit 1; }
+                echo "applied: $(basename "$p")"
               elif (cd openvela/nuttx && patch -p1 --dry-run --reverse < "$p" >/dev/null 2>&1); then
-                echo "already applied, skipping: $p"
+                echo "already applied, skipping: $(basename "$p")"
               else
-                echo "== NUTTX PATCH NOT APPLICABLE: $p =="
+                echo "== NUTTX PATCH NOT APPLICABLE: $(basename "$p") =="
+                # Print the actual patch diagnostics -- a bare "not applicable"
+                # with no reason is what made earlier failures guesswork.  The
+                # usual cause is a malformed hunk header (`malformed patch`):
+                # git apply is lenient about @@ -n,m counts, GNU patch is NOT.
+                (cd openvela/nuttx && patch -p1 --dry-run --forward < "$p") 2>&1 | head -30 || true
                 exit 1
               fi
             done
@@ -147,6 +202,8 @@ jobs:
           else
             echo "no staging/patches directory -- no nuttx patches to apply"
           fi
+          echo "== BSP SECTION 2/3: patch loop DONE =="
+          echo "== BSP SECTION 3/3: patch verify gates =="
           # Prove the patch landed: the size-override must be present in the
           # synced source the compiler will read.
           if grep -q 'app_irom_size = segment_hdr.data_len;' \
@@ -161,14 +218,25 @@ jobs:
           # --ram-only-header.  If it does, the patch did not land and we would
           # ship a 2-segment image that this board's ROM silently refuses to
           # boot (serial shows 0 bytes -- see 0002-esp32s3-Config.mk-*.patch).
+          #
+          # NOTE: do NOT append these to build.log.  build.log is created by the
+          # NEXT step (the build step, which sets working-directory: openvela);
+          # at bsp time it does not exist in this CWD, and under GitHub's
+          # `bash -e` a failed redirect aborts the step on the spot.  That is
+          # exactly what killed run#58: the step died here with NO message,
+          # leaving a 13-byte build_tail.log and a bare `bsp: failure`.
+          # Write to stdout instead -- step output is captured by Actions and
+          # survives regardless of whether later steps ever run.
           if grep -q 'ram-only-header' openvela/nuttx/tools/esp32s3/Config.mk; then
-            echo "== PATCH CHECK FAILED: tools/esp32s3/Config.mk still has --ram-only-header ==" >> build.log
+            echo "== PATCH CHECK FAILED: tools/esp32s3/Config.mk still has --ram-only-header =="
             exit 1
           fi
-          echo "PATCH CHECK OK: --ram-only-header removed from tools/esp32s3/Config.mk" >> build.log
+          echo "PATCH CHECK OK: --ram-only-header removed from tools/esp32s3/Config.mk"
+          echo "== BSP SECTION 3/3: verify gates DONE =="
           echo "BSP+应用已就位"
           echo "--- apps/examples/Kconfig ---"
-          cat openvela/apps/examples/Kconfig
+          # Diagnostic only.
+          cat openvela/apps/examples/Kconfig || true
 
       - name: Build AI-VOX3 openvela config (official m() Makefile chain via VELA_USE_MAKEFILE=1)
         id: build
