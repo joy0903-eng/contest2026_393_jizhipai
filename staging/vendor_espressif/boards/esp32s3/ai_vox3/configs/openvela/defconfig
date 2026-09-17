@@ -52,9 +52,13 @@ CONFIG_ESP32S3_FLASH_16M=y
 # (30M/20M, different pins) as a follow-up.  If the board is STILL dark but
 # the patched bootloader now prints on COM4, PSRAM is exonerated and we look
 # at the bootloader/app load path instead.
-# CONFIG_ESP32S3_SPIRAM is not set
-# CONFIG_ESP32S3_SPIRAM_MODE_OCT is not set
-# CONFIG_ESP32S3_SPIRAM_SPEED_40M is not set
+#
+# IMPORTANT: the three symbols are simply NOT MENTIONED (not written as
+# "# ... is not set").  Writing the comment form is harmless but pointless:
+# ESP32S3_SPIRAM defaults to n, and once it is off the MODE_OCT / SPEED_*
+# choice entries sit behind an unmet depends-on, so kconfig emits no line for
+# them either.  The CI gate therefore asserts "SPIRAM is not ENABLED" rather
+# than "the is-not-set comment exists" (see the run#52 note in build.yml).
 
 # --- Boot format: LEGACY IDF bootloader (run#40/#41 root cause) --------------
 # Kconfig (arch/xtensa/src/esp32s3/Kconfig, verbatim): the hidden symbol
@@ -111,7 +115,9 @@ CONFIG_LVGL_COLOR_DEPTH=16
 # run#52: PSRAM is off for the bisect (see the PSRAM block above), so LVGL must
 # NOT try to allocate its draw buffers from external RAM -- the allocation
 # would fail and could itself hang/crash the UI bringup, muddying the result.
-# CONFIG_LVGL_BUFFER_ALLOC_EXTERNAL is not set
+# Symbol simply omitted (default n); a grep on the .config in run#52's first CI
+# attempt proved LVGL_BUFFER_ALLOC* yields NO line there at all, so do not
+# write the "# ... is not set" form and do not assert it in the CI gate.
 CONFIG_LVGL_USE_DEMO_WIDGETS=y
 CONFIG_EXAMPLES_LVGLDEMO=y
 CONFIG_EXAMPLES_FB=y

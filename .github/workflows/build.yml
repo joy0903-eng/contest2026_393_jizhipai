@@ -170,8 +170,21 @@ jobs:
           # (The three positive SPIRAM entries were removed from the list above
           # on purpose -- asserting them would now fail the build.)  If PSRAM
           # ever sneaks back in, the bisect result becomes uninterpretable.
-          grep -qx '# CONFIG_ESP32S3_SPIRAM is not set' nuttx/.config || { echo "== CONFIG AUDIT FAILED: SPIRAM must be OFF for run#52 bisect ==" >> build.log; exit 1; }
-          grep -qx '# CONFIG_LVGL_BUFFER_ALLOC_EXTERNAL is not set' nuttx/.config || { echo "== CONFIG AUDIT FAILED: LVGL_BUFFER_ALLOC_EXTERNAL must be OFF when SPIRAM is off ==" >> build.log; exit 1; }
+          #
+          # NOTE -- why these do NOT use `grep -qx '# SYM is not set'`:
+          # run#52 first attempt failed here.  A symbol that is absent from the
+          # Kconfig tree entirely (or whose enclosing depends-on is unmet)
+          # produces NO line at all in .config -- not even the "# ... is not
+          # set" comment form.  Demanding the comment form therefore fails the
+          # build for a symbol that is correctly absent, which is the opposite
+          # of what we want.  The robust test is: the symbol must not be
+          # ENABLED (=y / =<number> / ="..."), whatever the reason.
+          if grep -qE '^CONFIG_ESP32S3_SPIRAM(=y|=1)' nuttx/.config; then
+            echo "== CONFIG AUDIT FAILED: SPIRAM must be OFF for run#52 bisect ==" >> build.log; exit 1
+          fi
+          { echo "== SPIRAM / LVGL negative audit probes =="
+            grep -n 'SPIRAM' nuttx/.config || echo "  (no SPIRAM symbol in .config at all)"
+            grep -n 'LVGL_BUFFER_ALLOC' nuttx/.config || echo "  (no LVGL_BUFFER_ALLOC symbol in .config at all)"; } >> build.log
           # nxmutex link fix (run#31): the mutex impl must stay inline.
           grep -qx '# CONFIG_LIBC_SEM_MUTEX_NOINLINE is not set' nuttx/.config || { echo "== CONFIG AUDIT FAILED: CONFIG_LIBC_SEM_MUTEX_NOINLINE must be off ==" >> build.log; exit 1; }
           echo "CONFIG AUDIT OK" >> build.log
