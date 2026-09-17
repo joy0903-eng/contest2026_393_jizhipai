@@ -208,31 +208,45 @@ jobs:
           # ------------------------------------------------------------------
           PATCHDIR="$PWD/team_repo/staging/patches"
           echo "== BSP SECTION 2/3: nuttx patch loop (PATCHDIR=$PATCHDIR) =="
+          # run#66: patches must be INDEPENDENT.  Previously the first failure
+          # did `exit 1` on the spot, which aborted the whole loop -- and
+          # because 0001 sorts before 0002, a broken 0001 meant 0002 was NEVER
+          # EVEN TRIED.  That is precisely the run#66 sequence:
+          #     0001 -> "Hunk #1 FAILED at 227" -> exit 1
+          #     0002 -> never attempted -> --ram-only-header stayed in the tree
+          #     -> 2-segment image -> ROM refuses to boot -> black screen
+          # A failing patch is still fatal to the build (we do not want to ship
+          # a half-patched tree), but it must not SKIP its siblings: apply all
+          # of them, collect the failures, and fail once at the end with the
+          # complete list.  That way one broken patch cannot hide another.
+          patch_failures=0
           if [ -d "$PATCHDIR" ]; then
             shopt -s nullglob
             for p in "$PATCHDIR"/*.patch; do
               echo "== NUTTX PATCH: $(basename "$p") =="
               if (cd openvela/nuttx && patch -p1 --dry-run --forward < "$p" >/dev/null 2>&1); then
                 (cd openvela/nuttx && patch -p1 --forward < "$p") \
-                  || { echo "== NUTTX PATCH APPLY FAILED: $(basename "$p") =="; exit 1; }
+                  || { echo "== NUTTX PATCH APPLY FAILED: $(basename "$p") =="; patch_failures=$((patch_failures+1)); }
                 echo "applied: $(basename "$p")"
               elif (cd openvela/nuttx && patch -p1 --dry-run --reverse < "$p" >/dev/null 2>&1); then
                 echo "already applied, skipping: $(basename "$p")"
               else
                 echo "== NUTTX PATCH NOT APPLICABLE: $(basename "$p") =="
                 # Print the actual patch diagnostics -- a bare "not applicable"
-                # with no reason is what made earlier failures guesswork.  The
-                # usual cause is a malformed hunk header (`malformed patch`):
-                # git apply is lenient about @@ -n,m counts, GNU patch is NOT.
+                # with no reason is what made earlier failures guesswork.
                 (cd openvela/nuttx && patch -p1 --dry-run --forward < "$p") 2>&1 | head -30 || true
-                exit 1
+                patch_failures=$((patch_failures+1))
               fi
             done
             shopt -u nullglob
           else
             echo "no staging/patches directory -- no nuttx patches to apply"
           fi
-          echo "== BSP SECTION 2/3: patch loop DONE =="
+          echo "== BSP SECTION 2/3: patch loop DONE (failures=$patch_failures) =="
+          if [ "$patch_failures" != "0" ]; then
+            echo "== BSP FATAL: $patch_failures patch(es) failed to apply -- refusing to build a half-patched tree =="
+            exit 1
+          fi
           echo "== BSP SECTION 3/3: patch verify gates =="
           # Prove the patch landed: the size-override must be present in the
           # synced source the compiler will read.
@@ -269,15 +283,45 @@ jobs:
           cat openvela/apps/examples/Kconfig || true
           echo "== BSP DONE (all sections) =="
           } 2>&1 | tee bsp.log
-          # The step's exit status must reflect the BODY, not `tee`.  With
-          # `set -o pipefail` absent, a pipeline's status is the LAST command's
-          # status -- so a failing body would look like success.  `bash -e`
-          # already aborted on the first failing command inside the braces, but
-          # we re-assert the real condition here for clarity.
-          if grep -q '== BSP FATAL' bsp.log; then
-            echo "bsp.log contains a FATAL marker -- failing the step"
-            exit 1
+          
+          # run#66: the body's exit status was being DISCARDED, so every
+          # `exit 1` inside the braces above was silently swallowed and the
+          # step reported success even when the patch loop aborted.  Proof from
+          # run#66's own bsp.log (the first run where bsp.log was actually
+          # captured):
+          #     == NUTTX PATCH NOT APPLICABLE: 0001-...patch ==
+          #     checking file arch/xtensa/src/common/espressif/esp_loader.c
+          #     Hunk #1 FAILED at 227.
+          #     1 out of 1 hunk FAILED
+          # and then the log simply STOPS -- no "SECTION 3/3", no "patch loop
+          # DONE", no sign of 0002.  The loop aborted at patch 0001 via the
+          # `exit 1` on the NOT APPLICABLE branch, so patch 0002 was NEVER
+          # TRIED, --ram-only-header stayed in the tree, and every build since
+          # run#58 produced a 2-segment bootloader-refused image.  That is the
+          # black screen.  And because the step still said `success`, nobody
+          # could see it.
+          #
+          # Why: `{ ... } 2>&1 | tee bsp.log` runs the body in a SUBSHELL, and
+          # a pipeline's status is the LAST command's -- `tee`, which always
+          # succeeds.  The previous comment claimed "bash -e already aborted on
+          # the first failing command inside the braces"; that is FALSE for a
+          # pipeline, so nothing aborted.  The `== BSP FATAL` backstop below
+          # could not help either: the exit-1 paths never print that marker.
+          # Read the pipe's real status from PIPESTATUS instead of guessing.
+          body_rc="${PIPESTATUS[0]}"
+          if [ "$body_rc" != "0" ]; then
+            echo "== BSP FATAL: body exited $body_rc (see bsp.log above for the aborting command)"
+            exit "$body_rc"
           fi
+          # Belt-and-braces: a successful body must have reached the last
+          # section.  If these markers are absent the body died early even
+          # though PIPESTATUS somehow read 0.
+          for marker in 'SECTION 3/3: verify gates DONE' 'BSP DONE (all sections)'; do
+            if ! grep -q "$marker" bsp.log; then
+              echo "== BSP FATAL: bsp.log is missing required marker: $marker"
+              exit 1
+            fi
+          done
           echo "bsp.log size: $(stat -c%s bsp.log 2>/dev/null || echo '?') bytes"
 
       - name: Build AI-VOX3 openvela config (official m() Makefile chain via VELA_USE_MAKEFILE=1)

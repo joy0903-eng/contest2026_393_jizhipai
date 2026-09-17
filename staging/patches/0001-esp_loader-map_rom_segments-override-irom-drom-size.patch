@@ -38,11 +38,11 @@ as exactly the number of segment bytes stored in flash (esp_image_format.c:
 `segment_hdr.data_len` in BOTH the DROM and IROM hit branches, mirroring the
 existing `app_*_start` rewrite.
 
+diff --git a/arch/xtensa/src/common/espressif/esp_loader.c b/arch/xtensa/src/common/espressif/esp_loader.c
+index ebbf128..4ad6a51 100644
 --- a/arch/xtensa/src/common/espressif/esp_loader.c
 +++ b/arch/xtensa/src/common/espressif/esp_loader.c
-@@ -227,15 +227,17 @@ int map_rom_segments(uint32_t app_drom_start, uint32_t app_drom_vaddr,
-       if (IS_DROM(segment_hdr.load_addr) &&
-           segment_hdr.load_addr == (uint32_t)_image_drom_vma)
+@@ -229,6 +229,7 @@ int map_rom_segments(uint32_t app_drom_start, uint32_t app_drom_vaddr,
          {
            app_drom_start = offset + sizeof(esp_image_segment_header_t);
            app_drom_start_aligned = app_drom_start & MMU_FLASH_MASK;
@@ -50,11 +50,11 @@ existing `app_*_start` rewrite.
            rom_segments++;
          }
  
-       if (IS_IROM(segment_hdr.load_addr) &&
-           segment_hdr.load_addr == (uint32_t)_image_irom_vma)
+@@ -237,6 +238,7 @@ int map_rom_segments(uint32_t app_drom_start, uint32_t app_drom_vaddr,
          {
            app_irom_start = offset + sizeof(esp_image_segment_header_t);
            app_irom_start_aligned = app_irom_start & MMU_FLASH_MASK;
 +          app_irom_size = segment_hdr.data_len;
            rom_segments++;
          }
+ 
