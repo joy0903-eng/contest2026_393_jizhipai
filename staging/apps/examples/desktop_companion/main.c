@@ -163,6 +163,21 @@ int main(int argc, char *argv[])
 
   syslog(LOG_INFO, "AI-VOX3 desktop_companion starting\n");
 
+  /* --- BSP bring-up -------------------------------------------------------
+   * 2026-09-17: with CONFIG_INIT_ENTRYPOINT="desktop_companion_main" the
+   * NSH startup chain never runs, so BOARDIOC_INIT ->
+   * board_app_initialize() (which registers /dev/lcd0, audio, servo,
+   * buttons via esp_board_initialize) would NEVER be called and ui_init()
+   * would find no LCD device.  Run it here ourselves.  Note: if the init
+   * entry were ever switched back to nsh_main, NSH would call this too --
+   * double init is loud in syslog but non-fatal.
+   */
+  ret = board_app_initialize(0);
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: board_app_initialize failed: %d\n", ret);
+    }
+
   /* --- Bring up subsystems --- */
   ui_init();
   net_init();

@@ -35,7 +35,12 @@ CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
 CONFIG_ESP32S3_FLASH_16M=y
 CONFIG_ESP32S3_SPIRAM=y
 CONFIG_ESP32S3_SPIRAM_MODE_OCT=y
-CONFIG_ESP32S3_SPIRAM_SPEED_80M=y
+# 2026-09-17: run#50 silence = NuttX never reached serial init; the only big
+# hardware step before console init is the OCTAL PSRAM bring-up.  80MHz was
+# our own choice (Arduino FQBN parity) and is UNTESTED in this fork on this
+# board; the fork's ESP32S3_SPIRAM_SPEED choice DEFAULT is 40MHz.  Drop to
+# 40M first (timing-marginality suspects die here).
+CONFIG_ESP32S3_SPIRAM_SPEED_40M=y
 
 # --- Boot format: LEGACY IDF bootloader (run#40/#41 root cause) --------------
 # Kconfig (arch/xtensa/src/esp32s3/Kconfig, verbatim): the hidden symbol
@@ -63,13 +68,19 @@ CONFIG_ESP32S3_APP_FORMAT_LEGACY=y
 CONFIG_SMP=y
 CONFIG_SMP_NCPUS=2
 
-# --- Console: native USB-CDC -------------------------------------------------
+# --- Console: native USB-Serial/JTAG -----------------------------------------
+# 2026-09-17 real-device forensics (run#50 silent on COM4): (a) CONFIG_ESP32S3_
+# CDCACM does NOT EXIST in this fork's esp32s3 Kconfig (ghost symbol, silently
+# dropped by olddefconfig); (b) CONFIG_CDCACM_CONSOLE belongs to the TinyUSB/
+# OTG CDC-ACM path and requires CONFIG_ESP32S3_OTG + USBDEV, never enabled ->
+# the console never attached at all.  The USB-Serial/JTAG hardware peripheral
+# is served by CONFIG_ESP32S3_USBSERIAL, whose lower half hard-codes
+# .isconsole=true -- exactly the official esp32s3-eye pattern (their nsh
+# defconfig sets ONLY ESP32S3_USBSERIAL=y for the console).  Keep USBSERIAL,
+# drop the ghost/broken trio.  UART0 console stays OFF: GPIO43/44 carry the
+# servo PWM (LEDC channel1/2 pins 43/44).
 CONFIG_ESP32S3_USBSERIAL=y
-CONFIG_ESP32S3_CDCACM=y
-CONFIG_CDCACM=y
-CONFIG_CDCACM_CONSOLE=y
 CONFIG_UART0_SERIAL_CONSOLE=n
-# TODO(real-device): verify USB-CDC console on the real board.
 
 # --- LCD: ST7789 240x240 (FSPI) + LVGL --------------------------------------
 CONFIG_LCD=y
