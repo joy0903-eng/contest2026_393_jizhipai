@@ -54,6 +54,27 @@ endif
 VPATH += :board
 CFLAGS += ${INCDIR_PREFIX}$(TOPDIR)$(DELIM)arch$(DELIM)$(CONFIG_ARCH)$(DELIM)src$(DELIM)board$(DELIM)board
 
+# run#62: ai_vox3_ws2812.c calls esp_rmt_tx_init(), which is declared in
+# arch/xtensa/src/common/espressif/esp_rmt.h.  That header lives in the arch
+# common/espressif directory, and NOTHING puts that directory on the include
+# path for a board driver:
+#   - arch/xtensa/src/common/espressif/Make.defs adds only its
+#     "platform_include" SUBdirectory (see its INCLUDES line), not itself;
+#   - the board's own include path above is arch/.../src/board/board only.
+# Without this line the compiler reports
+#   "implicit declaration of function 'esp_rmt_tx_init'"
+# which still compiles under implicit-int rules and fails later at link time,
+# looking unrelated to the real cause.
+#
+# Use the same idiom upstream uses for its own common/espressif path:
+# ARCH_SRCDIR is the arch source root (arch/xtensa/src), so appending
+# common/espressif reaches the directory holding esp_rmt.h, esp_gpio.h,
+# esp_i2c.h, esp_i2s.h, esp_clk_tree.h and friends.  Gated on the RMT chain
+# so we only widen the search path when the driver is actually built.
+ifeq ($(CONFIG_ESP_RMT),y)
+CFLAGS += ${INCDIR_PREFIX}$(ARCH_SRCDIR)$(DELIM)common$(DELIM)espressif
+endif
+
 # Board-local headers ("board.h" lives in the board include/ directory).
 # BOARD_COMMON_DIR is empty when CONFIG_ARCH_BOARD_COMMON is unset (our case,
 # see configs/openvela/defconfig) -- guard against expanding to "-I/include".

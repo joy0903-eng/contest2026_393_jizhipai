@@ -43,12 +43,20 @@
  * NOTE: there is no rmt_put_items() symbol.  I referenced one in an
  * intermediate draft of this file; it does not exist.  Do not reintroduce it.
  *
- * NOTE 2: do NOT put nested block comments in this header.  An earlier
- * revision of this very banner contained "/* <nuttx/rmt/rmt.h> */" inline.
- * C has no nested comments, so the banner terminated at that inner "*​/"
- * and the following pseudo-code lines leaked into the compiler as real code
- * -- producing "unknown type name 'not'" and "implicit declaration of
- * 'open'" at lines 39/44.  Use bracket notation instead, as above.
+ * NOTE 2 -- READ THIS BEFORE EDITING THIS BANNER.
+ * Do not put a second block comment inside this banner.  An earlier revision
+ * of this very text tried to name the header inline using a block comment, and
+ * because C has no nested comments the banner ended at that inner terminator.
+ * Everything after it -- the pseudo-code lines above -- then leaked into the
+ * compiler as real C and produced a cascade of bogus errors (unknown type name
+ * 'not', missing terminating quote, stray backtick) that looked like a dozen
+ * separate problems but were one.
+ *
+ * So: refer to headers in prose or in square brackets, as done on line 32,
+ * never with block-comment delimiters.  The same trap applies to the literal
+ * comment delimiters themselves -- writing them here to illustrate them would
+ * re-break this file a second time.  That is not hypothetical: it is exactly
+ * how the first attempt at fixing this failed.
  *
  ****************************************************************************/
 
@@ -66,7 +74,42 @@
 #include <errno.h>
 #include <syslog.h>
 
+/* RMT headers -- TWO of them, and this is not optional.
+ *
+ * run#62 built this file far enough to warn:
+ *     implicit declaration of function 'esp_rmt_tx_init'
+ *     implicit declaration of function 'rmtchar_register'
+ * That is the "wrong header" failure mode: the calls still compile (C89
+ * implicit-int rules), so the link step is the next thing to fail, and the
+ * symptom looks unrelated to the cause.
+ *
+ * Verified against the exact synced revision (open-vela/nuttx @
+ * dev-ai-contest-2026, the branch this project's manifest pins):
+ *
+ *   <nuttx/rmt/rmt.h>        struct rmt_dev_s, struct rmt_ops_s.  NO function
+ *                            prototypes at all.  Still required, because we
+ *                            hold a `struct rmt_dev_s *`.
+ *   <nuttx/rmt/rmtchar.h>    int rmtchar_register(FAR struct rmt_dev_s *rmt);
+ *                            guarded by #ifdef CONFIG_RMTCHAR.
+ *                            It is NOT in rmt.h -- including only rmt.h is
+ *                            exactly what produced the implicit declaration.
+ *   arch/xtensa/src/common/espressif/esp_rmt.h
+ *                            struct rmt_dev_s *esp_rmt_tx_init(int ch,int pin);
+ *                            guarded by #if defined(CONFIG_ESP_RMT).
+ *                            This is an ARCH header, not a nuttx/ one, so it
+ *                            is reached via the arch include path.
+ *
+ * Naming: "esp_rmt.h" is included by BARE NAME, exactly as upstream's own
+ * esp_rmt.c does.  It resolves because ai_vox3/src/Make.defs adds
+ * $(ARCH_SRCDIR)/common/espressif to the include path when CONFIG_ESP_RMT=y.
+ * Do not "helpfully" rewrite it as <arch/xtensa/src/common/espressif/...>:
+ * that form is NOT on any include path in this build and will 404 the file.
+ */
+
 #include <nuttx/rmt/rmt.h>
+#include <nuttx/rmt/rmtchar.h>
+
+#include "esp_rmt.h"
 
 #include <arch/board/board.h>
 

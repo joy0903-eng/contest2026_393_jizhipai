@@ -259,6 +259,25 @@ CONFIG_ESP32S3_GPIO_IRQ=y
 # the failure mode that hid this bug.  Enable the full chain:
 CONFIG_RMT=y
 CONFIG_ESP_RMT=y
+#
+# run#62: RMTCHAR is the THIRD link and it was still missing.
+#
+# rmtchar_register() -- the call that actually publishes /dev/rmt0 so the
+# driver can write WS2812 items -- is declared in <nuttx/rmt/rmtchar.h>, which
+# hides everything behind `#ifdef CONFIG_RMTCHAR`.  With the symbol unset the
+# prototype vanishes, the compiler falls back to an implicit declaration
+# (C89 implicit-int), the build continues, and the failure surfaces later as an
+# unrelated-looking link error.  That is precisely what run#62 reported:
+#   board/ai_vox3_ws2812.c:153: warning: implicit declaration of function
+#                               'rmtchar_register'
+#
+# drivers/rmt/Kconfig declares RMTCHAR inside `if RMT`, so CONFIG_RMT (above)
+# is its only prerequisite -- no further depends chain to satisfy.
+# Note the Kconfig help calls this driver "for testing only" and says that
+# applications driving WS2812 must supply their own specific implementation.
+# That is what we are doing: ai_vox3_ws2812.c builds the RMT item stream
+# itself and uses rmtchar only as the documented /dev/rmtN write seam.
+CONFIG_RMTCHAR=y
 CONFIG_AI_VOX3_WS2812=y
 
 # --- Force nxmutex inline path (run#31 link fix) -----------------------------
