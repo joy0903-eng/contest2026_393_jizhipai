@@ -1,0 +1,56 @@
+Drop --ram-only-header from the ESP32-S3 elf2image command line
+
+tools/esp32s3/Config.mk
+
+WHY
+---
+`tools/esp32s3/Config.mk` appends `--ram-only-header` to the `elf2image`
+command line whenever `CONFIG_ESPRESSIF_SIMPLE_BOOT=y`:
+
+  $(eval ELF2IMAGE_OPTS := $(if $(CONFIG_ESPRESSIF_SIMPLE_BOOT),--ram-only-header) \
+       -fs $(FLASH_SIZE) -fm $(FLASH_MODE) -ff $(FLASH_FREQ))
+
+`--ram-only-header` tells `elf2image` to describe ONLY the RAM (IRAM/DRAM)
+segments in the image header and to hide the XIP (IROM/DROM) segments.  The
+result is a 2-segment image whose header carries no loadable XIP segment for
+the ROM to act on.
+
+Measured on the AI-VOX3 board (ESP32-S3, ROM banner `ESP-ROM:esp32s3-20210327`):
+
+  run#55/56  (--ram-only-header active)  -> segcount=2, flashed at 0x0
+                serial: 0 BYTES (completely silent -- not even the ROM banner)
+  run#52     (no --ram-only-header)      -> segcount=5, flashed at 0x0
+                serial: 24364 bytes -> `entry 0x40374af0` -> IllegalInstruction
+
+i.e. with a 2-segment (ram-only) image this board's ROM reads the image header,
+finds no loadable segment and gives up BEFORE it prints anything -- not even
+its own `ESP-ROM:` banner.  The flag is SIMPLE_BOOT's intended design, but this
+particular ROM revision does not cooperate with it, so the 2-segment image can
+never boot here.  The 5-segment image is the only path that even reaches
+`entry`; the remaining crash on that path is a separate XIP issue handled by
+0001-esp_loader-map_rom_segments-override-irom-drom-size.patch.
+
+FIX
+---
+Remove the conditional `$(if $(CONFIG_ESPRESSIF_SIMPLE_BOOT),--ram-only-header)`
+block so the elf2image command line is just the plain flash geometry:
+
+  $(eval ELF2IMAGE_OPTS := -fs $(FLASH_SIZE) -fm $(FLASH_MODE) -ff $(FLASH_FREQ))
+
+This makes MKIMAGE emit a normal 5-segment image (DROM + IROM visible in the
+header) that the board's ROM accepts and jumps into, exactly as run#52 did.
+
+Scope: esp32s3 ONLY.  tools/espressif/Config.mk, tools/esp32s2/Config.mk and
+tools/esp32/Config.mk contain the same `$(if ...)` line, but those chips are
+not used by this board and are deliberately left untouched to keep the change
+minimal and low-risk.  Verified only tools/esp32s3/Config.mk matches.
+
+--- a/tools/esp32s3/Config.mk
++++ b/tools/esp32s3/Config.mk
+@@ -186,5 +186,5 @@ define MKIMAGE
+ 		exit 1; \
+ 	fi
+-	$(eval ELF2IMAGE_OPTS := $(if $(CONFIG_ESPRESSIF_SIMPLE_BOOT),--ram-only-header) -fs $(FLASH_SIZE) -fm $(FLASH_MODE) -ff $(FLASH_FREQ))
++	$(eval ELF2IMAGE_OPTS := -fs $(FLASH_SIZE) -fm $(FLASH_MODE) -ff $(FLASH_FREQ))
+ 	esptool.py -c esp32s3 elf2image $(ELF2IMAGE_OPTS) -o nuttx.bin nuttx
+ 	$(Q) echo nuttx.bin >> nuttx.manifest

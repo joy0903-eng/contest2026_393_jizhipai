@@ -157,6 +157,15 @@ jobs:
             echo "   (the IllegalInstruction workaround did NOT land -- do not flash this build)"
             exit 1
           fi
+          # Self-check: the elf2image command line must no longer contain
+          # --ram-only-header.  If it does, the patch did not land and we would
+          # ship a 2-segment image that this board's ROM silently refuses to
+          # boot (serial shows 0 bytes -- see 0002-esp32s3-Config.mk-*.patch).
+          if grep -q 'ram-only-header' openvela/nuttx/tools/esp32s3/Config.mk; then
+            echo "== PATCH CHECK FAILED: tools/esp32s3/Config.mk still has --ram-only-header ==" >> build.log
+            exit 1
+          fi
+          echo "PATCH CHECK OK: --ram-only-header removed from tools/esp32s3/Config.mk" >> build.log
           echo "BSP+应用已就位"
           echo "--- apps/examples/Kconfig ---"
           cat openvela/apps/examples/Kconfig
@@ -407,13 +416,24 @@ jobs:
         if: always()
         working-directory: openvela
         run: |
+          # Everything Collect does is written to openvela/collect.log so the
+          # logs branch (which copies collect.log) shows exactly what happened.
+          # Without this the step's own output never reached build.log and we
+          # could not tell WHY nuttx.map / the ELF were missing from the
+          # uploaded artifacts.
+          {
           mkdir -p firmware
+          echo "== Collect: cwd = $PWD =="
+          echo "== Collect: staging dir =="
+          ls -la firmware || true
           # SIMPLE_BOOT build: NuttX is loaded straight from the ROM, so the
           # ONLY artifact is nuttx.bin and it is flashed at offset 0x0.
           # There is no 2nd-stage bootloader and no generated partition table,
           # so there is nothing to merge -- an earlier revision of this step
           # shelled out to `esptool merge_bin` for a bootloader + partition
           # table + app trio, which no longer exists.
+          echo "== Collect: binlist =="
+          find nuttx -name '*.bin' -exec ls -la {} \; 2>&1 || true
           find nuttx -name '*.bin' -exec ls -la {} \; > binlist.txt 2>&1 || true
           tail -c 3000 binlist.txt || true
           find nuttx -name 'nuttx.bin' -exec cp -v {} firmware/ \; 2>/dev/null || true
@@ -421,13 +441,25 @@ jobs:
           # guessed at -- with nuttx.map (or the ELF) we can run
           #   xtensa-esp32s3-elf-addr2line -e nuttx <PC>
           # and land on the exact source line.  Ship them with the firmware.
-          find nuttx -maxdepth 1 -name 'nuttx'     -exec cp -v {} firmware/ \; 2>/dev/null || true
-          find nuttx -maxdepth 1 -name 'nuttx.map' -exec cp -v {} firmware/ \; 2>/dev/null || true
+          echo "== Collect: ELF =="
+          ls -la nuttx/nuttx 2>&1 || echo "  (no nuttx ELF at nuttx/nuttx)"
+          find nuttx -maxdepth 1 -name 'nuttx' -exec cp -v {} firmware/ \; 2>&1 || true
+          # The map file is NOT always named nuttx.map: `tools/Unix.mk` globs
+          # whatever *.map the link produced into nuttx.manifest, and on this
+          # arch the only map emitted by default is User.map (protected build)
+          # or none at all when CONFIG_DEBUG_LINK_MAP is off.  Do not assume the
+          # name -- enumerate every *.map and copy them all.
+          echo "== Collect: map files (any *.map under nuttx/) =="
+          find nuttx -name '*.map' -exec ls -la {} \; 2>&1 || echo "  (no *.map found anywhere under nuttx/)"
+          find nuttx -maxdepth 1 -name '*.map' -exec cp -v {} firmware/ \; 2>&1 || true
+          echo "== Collect: nuttx.manifest (the build's own artifact list) =="
+          ls -la nuttx/nuttx.manifest 2>&1 || echo "  (no nuttx/nuttx.manifest)"
+          cat nuttx/nuttx.manifest 2>&1 || true
           # Self-describing artifact: sha256 + segment structure.  If the board
           # ever behaves differently from what this says, the problem is
           # downstream of CI.
           sha256sum nuttx/nuttx.bin > firmware/nuttx.bin.sha256 2>/dev/null || true
-          cp -v binlist.txt firmware/ 2>/dev/null || true
+          cp -v binlist.txt firmware/ 2>&1 || true
           # The Publish step runs only on success and the logs branch only on
           # failure, so ship the build.log tail WITH the firmware itself
           # (Collect runs `if: always()`).
@@ -444,7 +476,10 @@ jobs:
             echo "== nuttx.bin =="
             ls -la nuttx/nuttx.bin 2>/dev/null || echo "  MISSING"
           } >> firmware/build_tail.log
+          echo "== Collect: firmware/ contents =="
           ls -la firmware || true
+          echo "== Collect: DONE =="
+          } 2>&1 | tee collect.log
 
       - name: Publish firmware to firmware branch (SSH-pullable)
         # Gated on the ARTIFACT, not on step status.  run#54 taught us that a
