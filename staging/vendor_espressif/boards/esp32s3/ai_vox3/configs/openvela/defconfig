@@ -213,7 +213,15 @@ CONFIG_AIVOX3_LLM_API_KEY=""
 CONFIG_BOARDCTL=y
 CONFIG_FS_PROCFS=y
 CONFIG_FS_PROCFS_REGISTER=y
-CONFIG_INIT_ENTRYPOINT="nsh_main"
+# 2026-09-17 real-device forensics: with INIT_ENTRYPOINT=nsh_main the board
+# boots to the NSH shell and NOTHING ever starts desktop_companion -- the LCD
+# shows a dark screen (panel init ran via board_app_initialize, but no app
+# ever draws). The Arduino bootloader also REJECTED the nuttx image
+# ("Image requires efuse blk rev ... / No bootable app partitions") -> the
+# original "black screen" was a bootloop, not a display failure. The CI
+# bootloader chain loads NuttX silently. Auto-start the app as the init task
+# (main.c is a while(1) loop, never returns):
+CONFIG_INIT_ENTRYPOINT="desktop_companion_main"
 CONFIG_NSH_ARCHINIT=y
 CONFIG_NSH_BUILTIN_APPS=y
 CONFIG_NSH_FILE_APPS=y
