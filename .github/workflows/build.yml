@@ -163,92 +163,36 @@ jobs:
           grep -E '^CONFIG_(AUDIO|DRIVERS_AUDIO|I2C|I2S|ES8311|LCD_ST7789|ESP32S3_SPI2|ESP32S3_APP_FORMAT|ESPRESSIF)' nuttx/.config >> build.log || true
           # Diagnostics for the run#32 link fixes (A: task_tls, B: nxmutex):
           grep -E 'NOINLINE|TLS_TASK_NELEM' nuttx/.config >> build.log || true
-          for sym in CONFIG_AUDIO=y CONFIG_DRIVERS_AUDIO=y CONFIG_AUDIO_ES8311=y CONFIG_AUDIO_I2S=y CONFIG_I2C=y CONFIG_I2S=y CONFIG_ESP32S3_I2C0=y CONFIG_ESP32S3_I2C0_MASTER_MODE=y CONFIG_ESPRESSIF_I2C_PERIPH_MASTER_MODE=y CONFIG_ESP32S3_I2S=y CONFIG_ESP32S3_SPI2=y CONFIG_LCD_ST7789=y CONFIG_AI_VOX3_SERVO=y CONFIG_AI_VOX3_BUTTONS=y CONFIG_ESP32S3_LEDC=y CONFIG_ESP32S3_LEDC_TIM0=y CONFIG_ESP32S3_LEDC_TIM0_CHANNELS=1 CONFIG_ESP32S3_LEDC_CHANNEL0_PIN=42 CONFIG_ESP32S3_LEDC_CHANNEL1_PIN=43 CONFIG_ESP32S3_LEDC_CHANNEL2_PIN=44 CONFIG_ESP32S3_LEDC_CHANNEL3_PIN=48 CONFIG_ESP32S3_GPIO_IRQ=y CONFIG_TLS_TASK_NELEM=8 CONFIG_ESP32S3_APP_FORMAT_LEGACY=y CONFIG_ESP32S3_USBSERIAL=y CONFIG_INIT_ENTRYPOINT='"desktop_companion_main"'; do
+          for sym in CONFIG_AUDIO=y CONFIG_DRIVERS_AUDIO=y CONFIG_AUDIO_ES8311=y CONFIG_AUDIO_I2S=y CONFIG_I2C=y CONFIG_I2S=y CONFIG_ESP32S3_I2C0=y CONFIG_ESP32S3_I2C0_MASTER_MODE=y CONFIG_ESPRESSIF_I2C_PERIPH_MASTER_MODE=y CONFIG_ESP32S3_I2S=y CONFIG_ESP32S3_SPI2=y CONFIG_LCD_ST7789=y CONFIG_AI_VOX3_SERVO=y CONFIG_AI_VOX3_BUTTONS=y CONFIG_ESP32S3_LEDC=y CONFIG_ESP32S3_LEDC_TIM0=y CONFIG_ESP32S3_LEDC_TIM0_CHANNELS=1 CONFIG_ESP32S3_LEDC_CHANNEL0_PIN=42 CONFIG_ESP32S3_LEDC_CHANNEL1_PIN=43 CONFIG_ESP32S3_LEDC_CHANNEL2_PIN=44 CONFIG_ESP32S3_LEDC_CHANNEL3_PIN=48 CONFIG_ESP32S3_GPIO_IRQ=y CONFIG_TLS_TASK_NELEM=8 CONFIG_ESP32S3_USBSERIAL=y CONFIG_ESP32S3_SPIRAM=y CONFIG_ESP32S3_SPIRAM_MODE_OCT=y CONFIG_ESP32S3_SPIRAM_BOOT_INIT=y CONFIG_ESP32S3_SPIRAM_COMMON_HEAP=y CONFIG_LV_COLOR_DEPTH=16 CONFIG_LV_USE_CLIB_MALLOC=y CONFIG_INIT_ENTRYPOINT='"desktop_companion_main"'; do
             grep -qx "$sym" nuttx/.config || { echo "== CONFIG AUDIT FAILED: $sym not in .config ==" >> build.log; exit 1; }
           done
-          # run#52 BISECT NEGATIVE AUDIT: PSRAM must be OFF for this run.
-          # (The three positive SPIRAM entries were removed from the list above
-          # on purpose -- asserting them would now fail the build.)  If PSRAM
-          # ever sneaks back in, the bisect result becomes uninterpretable.
-          #
-          # NOTE -- why these do NOT use `grep -qx '# SYM is not set'`:
-          # run#52 first attempt failed here.  A symbol that is absent from the
-          # Kconfig tree entirely (or whose enclosing depends-on is unmet)
-          # produces NO line at all in .config -- not even the "# ... is not
-          # set" comment form.  Demanding the comment form therefore fails the
-          # build for a symbol that is correctly absent, which is the opposite
-          # of what we want.  The robust test is: the symbol must not be
-          # ENABLED (=y / =<number> / ="..."), whatever the reason.
-          if grep -qE '^CONFIG_ESP32S3_SPIRAM(=y|=1)' nuttx/.config; then
-            echo "== CONFIG AUDIT FAILED: SPIRAM must be OFF for run#52 bisect ==" >> build.log; exit 1
+          # SIMPLE_BOOT gate: the board must boot straight from the ROM with no
+          # 2nd-stage IDF bootloader.  If APP_FORMAT_LEGACY (or MCUBOOT) is ever
+          # selected, ESPRESSIF_SIMPLE_BOOT is silently disabled by its
+          # depends-on and we end up on an IDF bootloader whose chip-revision
+          # check rejects this ESP32-S3 (revision v0.2) -- symptom: dark LCD,
+          # zero bytes on the USB-Serial/JTAG console.
+          if grep -qE '^CONFIG_ESP32S3_APP_FORMAT_(LEGACY|MCUBOOT)=y' nuttx/.config; then
+            echo "== CONFIG AUDIT FAILED: an APP_FORMAT is selected -> SIMPLE_BOOT is off ==" >> build.log
+            grep -E 'APP_FORMAT|SIMPLE_BOOT' nuttx/.config >> build.log || true
+            exit 1
           fi
-          { echo "== SPIRAM / LVGL negative audit probes =="
+          if ! grep -qE '^CONFIG_ESPRESSIF_SIMPLE_BOOT=y' nuttx/.config; then
+            echo "== CONFIG AUDIT FAILED: ESSPRESSIF_SIMPLE_BOOT is not y (direct boot expected) ==" >> build.log
+            grep -E 'SIMPLE_BOOT|APP_FORMAT' nuttx/.config >> build.log || true
+            exit 1
+          fi
+          { echo "== SPIRAM / LVGL audit probes =="
             grep -n 'SPIRAM' nuttx/.config || echo "  (no SPIRAM symbol in .config at all)"
-            grep -n 'LVGL_BUFFER_ALLOC' nuttx/.config || echo "  (no LVGL_BUFFER_ALLOC symbol in .config at all)"; } >> build.log
+            # NOTE: probe LV_* (the real LVGL symbols), NOT LVGL_* -- the
+            # latter prefix does not exist in LVGL's Kconfig, so an LVGL_*
+            # grep matches nothing and tells us nothing.  See the LVGL block
+            # in the board defconfig for the full story.
+            grep -nE 'LV_COLOR_DEPTH|LV_USE_(CLIB|BUILTIN)_MALLOC|LV_USE_DEMO_WIDGETS' nuttx/.config \
+              || echo "  (no LV_* symbol in .config at all)"; } >> build.log
           # nxmutex link fix (run#31): the mutex impl must stay inline.
           grep -qx '# CONFIG_LIBC_SEM_MUTEX_NOINLINE is not set' nuttx/.config || { echo "== CONFIG AUDIT FAILED: CONFIG_LIBC_SEM_MUTEX_NOINLINE must be off ==" >> build.log; exit 1; }
           echo "CONFIG AUDIT OK" >> build.log
-          # ------------------------------------------------------------------
-          # run#52: BOOTLOADER CONSOLE -> USB-Serial/JTAG  (diagnostic)
-          # ------------------------------------------------------------------
-          # Why: on this board the 2nd-stage IDF bootloader defaults to
-          # CONFIG_ESP_CONSOLE_UART (UART0 = GPIO43/44).  The AI-VOX3 has no
-          # USB-UART bridge on those pins -- only the native USB-Serial/JTAG
-          # port (GPIO19/20) is exposed as COM4 -- so every bootloader message
-          # has been invisible, which is exactly why a dead bootloader and a
-          # dead NuttX look identical from the host (0 bytes on COM4).
-          #
-          # Mechanism (verified in the fork's arch/xtensa/src/esp32s3/
-          # Bootloader.mk + espressif/esp-nuttx-bootloader build_idfboot.sh):
-          #   * Bootloader.mk generates `bootloader.conf` from nuttx/.config;
-          #     its LEGACY block writes ONLY the flash size/mode/freq and the
-          #     partition-table settings -- no console line at all.
-          #   * build_idfboot.sh passes `-f bootloader.conf` straight through
-          #     as cmake's -DSDKCONFIG_DEFAULTS, so whatever is in that file
-          #     wins over the bootloader repo's own sdkconfig.defaults.
-          #   * Therefore appending $(call cfg_en,CONFIG_ESP_CONSOLE_USB_
-          #     SERIAL_JTAG) to the LEGACY block makes the generated conf
-          #     carry CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y (cfg_en emits
-          #     "=<1|y>" in the MCUBOOT case and "=y" otherwise), and the
-          #     bootloader logs land on COM4 where we can actually read them.
-          #
-          # Soft-fail by design: if the fork's Bootloader.mk ever changes
-          # shape we want a NOISY SKIP, never a broken build.
-          # ------------------------------------------------------------------
-          python3 - <<'PYEOF' >> build.log 2>&1 || echo "BOOTLOADER CONSOLE PATCH STEP ERRORED (non-fatal)" >> build.log
-          import pathlib, sys
-
-          mk = pathlib.Path("nuttx/arch/xtensa/src/esp32s3/Bootloader.mk")
-          anchor = (
-              "\t\t$(call cfg_val,CONFIG_PARTITION_TABLE_OFFSET,"
-              "$(CONFIG_ESP32S3_PARTITION_TABLE_OFFSET)) \\\n"
-          )
-          inject = "\t\t$(call cfg_en,CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG) \\\n"
-
-          if not mk.is_file():
-              print("BOOTLOADER CONSOLE PATCH SKIPPED: %s not found" % mk)
-              sys.exit(0)
-
-          text = mk.read_text()
-          if "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG" in text:
-              print("BOOTLOADER CONSOLE PATCH SKIPPED: already present")
-              sys.exit(0)
-
-          if anchor not in text:
-              print("BOOTLOADER CONSOLE PATCH SKIPPED: anchor not found")
-              idx = text.find("PARTITION_TABLE_CUSTOM")
-              print("--- Bootloader.mk context around PARTITION_TABLE ---")
-              print(text[max(0, idx - 600): idx + 600] if idx >= 0 else text[-1200:])
-              sys.exit(0)
-
-          mk.write_text(text.replace(anchor, anchor + inject, 1))
-          print("BOOTLOADER CONSOLE PATCH APPLIED")
-          for n, line in enumerate(mk.read_text().splitlines(), 1):
-              if "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG" in line:
-                  print("  patched line %d: %s" % (n, line.strip()))
-          PYEOF
-          echo "== bootloader console patch probe ==" >> build.log
-          grep -n 'CONFIG_ESP_CONSOLE' nuttx/arch/xtensa/src/esp32s3/Bootloader.mk >> build.log || echo "  (no CONFIG_ESP_CONSOLE line in Bootloader.mk)" >> build.log
           # ------------------------------------------------------------------
           # Pre-seed esp-hal-3rdparty at the pinned commit and fix its lock
           # initializer BEFORE the build's own clone step (run#23/#24):
@@ -318,162 +262,39 @@ jobs:
           rc=$?
           echo "M-CHAIN rc=$rc" >> build.log
           ls -la nuttx/nuttx nuttx/nuttx.bin 2>/dev/null || true
-          # ------------------------------------------------------------------
-          # BOOTLOADER + PARTITION TABLE (run#42, root cause nailed verbatim
-          # from Bootloader.mk + Kconfig): the defconfig now pins
-          # CONFIG_ESP32S3_APP_FORMAT_LEGACY=y.  Before that, the hidden
-          # ESPRESSIF_SIMPLE_BOOT defaulted to y (LEGACY defaults to
-          # `y if BUILD_PROTECTED`, and this is a flat build), so the
-          # `bootloader` target was the empty-shell branch ("Using direct
-          # bootloader to boot NuttX.") and produced NOTHING -- the
-          # run#40/#41 binlist forensics.  The LEGACY branch clones
-          # esp-nuttx-bootloader, runs build_idfboot.sh -c esp32s3 -s -f
-          # (inits the esp-idf submodule, cmake-builds the IDF 2nd-stage
-          # bootloader with the xtensa toolchain already in PATH, then
-          # gen_esp32part for the table) and COPYFILEs BOTH products to
-          # TOPDIR.  There is NO separate partition_table target.
-          # ------------------------------------------------------------------
-          {
-            echo "== boot format in .config: =="
-            grep -E 'APP_FORMAT|SIMPLE_BOOT|PARTITION_TABLE_OFFSET|FLASH_(16M|MODE|FREQ)' nuttx/.config || true
-            # run#42: the IDF bootloader cmake died at build.cmake:542 with
-            #   ModuleNotFoundError: No module named 'idf_component_manager'
-            # build_idfboot.sh passes -DPYTHON_DEPS_CHECKED=1, which only
-            # SKIPS the dependency check -- it installs nothing.  Install
-            # it up front into the same interpreter cmake uses
-            # (/usr/bin/python == python3 via python-is-python3; pip
-            # defaults to --user here, run#38 forensics).
-            echo "== ensure idf_component_manager =="
-            # --upgrade-strategy eager: upgrade ALL deps to their latest into
-            # the user site.  The runner's /usr/lib/python3/dist-packages
-            # carries stale versions (pyparsing 2.4.7, requests 2.25.1,
-            # click 8.0.3, ...) and pip's default "only-if-needed" strategy
-            # treats them as satisfied, so every unversioned dep had to be
-            # re-fixed by hand: run#43 = OpAssoc (pyparsing), run#44 =
-            # JSONDecodeError (requests.exceptions, requests>=2.27).  eager
-            # installs the whole tree fresh into ~/.local, which precedes
-            # dist-packages on sys.path -- one shot instead of whack-a-mole.
-            { python3 -m pip install --user --upgrade --upgrade-strategy eager idf-component-manager \
-                || python3 -m pip install --upgrade --upgrade-strategy eager idf-component-manager \
-                || python3 -m pip install --user --break-system-packages --upgrade --upgrade-strategy eager idf-component-manager; } \
-              || { echo "== IDF-COMPONENT-MANAGER INSTALL FAILED =="; exit 1; }
-            # run#43: pip found the system pyparsing 2.4.7 in
-            # /usr/lib/python3/dist-packages and treated the (unversioned)
-            # dependency as satisfied, so it never installed a newer one;
-            # the real CLI entry then died on a pyparsing 3.x-only API:
-            #   ImportError: cannot import name 'OpAssoc' from 'pyparsing'
-            # Force-upgrade pyparsing into the user site (which precedes
-            # dist-packages on sys.path).
-            { python3 -m pip install --user --upgrade "pyparsing>=3.0" \
-                || python3 -m pip install --user --break-system-packages --upgrade "pyparsing>=3.0"; } \
-              || { echo "== PYPARSING INSTALL FAILED =="; exit 1; }
-            # Deep import check (run#43 lesson): idf_component_manager's
-            # __init__ is lazy -- the shallow `import idf_component_manager`
-            # check passed while the actual entry died at
-            # core.py:59 -> idf_component_tools.manifest -> ... ->
-            # if_parser -> pyparsing.  Importing .core walks that whole
-            # chain and catches any other shadowed/missing dep.
-            python3 -c "import idf_component_manager.core, sys; print('idf_component_manager.core OK on', sys.executable)" \
-              || { echo "== IDF-COMPONENT-MANAGER IMPORT FAILED =="; exit 1; }
-            # run#45 (esp-idf@1559b63 forensics): project.cmake does
-            #   if(NOT "$ENV{IDF_COMPONENT_MANAGER}" EQUAL "0")
-            #     idf_build_set_property(IDF_COMPONENT_MANAGER 1)
-            #   idf_build_set_property(__COMPONENT_MANAGER_INTERFACE_VERSION 2)
-            # so the cmake stage invokes
-            #   python -m idf_component_manager.prepare_components
-            #     --interface_version=2 ...
-            # and icm 3.1.2 rejects version 2 ("invalid choice: 2 (choose
-            # from 4, 5, 6)").  The bootloader project only uses built-in
-            # IDF components, so export IDF_COMPONENT_MANAGER=0: the
-            # idf_build_process in build.cmake then SKIPS the
-            # prepare_components call entirely (the property stays at the
-            # 0 default from __build_init; no managed components involved).
-            export IDF_COMPONENT_MANAGER=0
-            echo "IDF_COMPONENT_MANAGER=$IDF_COMPONENT_MANAGER"
-            # run#46/#47: with the component manager skipped, the next gate
-            # is sdkconfig generation -- kconfig.cmake invokes
-            #   python -m kconfgen --kconfig <IDF>/Kconfig ...
-            # and died with "/usr/bin/python: No module named kconfgen".
-            # run#47 forensics settled WHERE kconfgen comes from at this
-            # esp-idf commit (1559b63, 2023-03-13):
-            #   - tools/kconfgen.py             -> 404 (not in tree)
-            #   - tools/kconfig_new/kconfgen.py -> 404 (not in tree either)
-            #   - tools/kconfig_new/confgen.py (260B) is a pure shim:
-            #       sys.exit(subprocess.run([sys.executable, '-m', 'kconfgen'] + sys.argv[1:]))
-            #   - kconfig.cmake sets NO PYTHONPATH: kconfgen_basecommand is
-            #     a bare `${python} -m kconfgen`, i.e. kconfgen must be an
-            #     INSTALLED module of the python env.
-            # The provider is the pip package `esp-idf-kconfig`, listed in
-            # tools/requirements/requirements.core.txt (same file as
-            # idf-component-manager).  A normal IDF setup installs it via
-            # install.py -- which Bootloader.mk never runs, so it was
-            # missing.  The run#46 PYTHONPATH export pointed at <IDF>/tools
-            # and was useless; it is gone now.
-            # Pin ==1.1.0: the version current when this esp-idf master
-            # snapshot was cut (1.2.0 only landed 2023-07).  1.x is a
-            # kconfiglib wrapper with a minimal dep tree (kconfiglib is
-            # already installed in this step); 3.x pulls textual/esp-pylib
-            # and its top-level module layout could not be verified from
-            # PyPI metadata -- not worth the risk.
-            { python3 -m pip install --user "esp-idf-kconfig==1.1.0" \
-                || python3 -m pip install "esp-idf-kconfig==1.1.0" \
-                || python3 -m pip install --user --break-system-packages "esp-idf-kconfig==1.1.0" \
-                || python3 -m pip install --user esp-idf-kconfig; } \
-              || { echo "== ESP-IDF-KCONFIG INSTALL FAILED =="; exit 1; }
-            # Deep check (run#43 lesson): verify the EXACT module name the
-            # cmake will invoke, before spending 15 minutes in make.
-            python3 -c "import kconfgen, sys; print('kconfgen OK on', sys.executable, kconfgen.__file__)" \
-              || { echo "== KCONFGEN IMPORT FAILED =="; exit 1; }
-            echo "== make -C nuttx bootloader =="
-            make -C nuttx bootloader 2>&1 || echo "== BOOTLOADER MAKE FAILED (full output above) =="
-            echo "== bootloader products in nuttx/: =="
-            ls -la nuttx/bootloader-esp32s3.bin nuttx/partition-table-esp32s3.bin 2>&1 || true
           } >> build.log 2>&1
 
-      - name: Collect firmware (merge if needed)
+      - name: Collect firmware
         if: always()
         working-directory: openvela
         run: |
           mkdir -p firmware
-          # run#39: only nuttx.bin surfaced at depth<=2.  The bootloader
-          # (esp-hal-3rdparty build) and the partition table live deeper
-          # in the tree -- search FULL depth and record every .bin found
-          # (binlist.txt ships in the firmware branch as forensics).
+          # SIMPLE_BOOT build: NuttX is loaded straight from the ROM, so the
+          # ONLY artifact is nuttx.bin and it is flashed at offset 0x0.
+          # There is no 2nd-stage bootloader and no generated partition table,
+          # so there is nothing to merge -- an earlier revision of this step
+          # shelled out to `esptool merge_bin` for a bootloader + partition
+          # table + app trio, which no longer exists.
           find nuttx -name '*.bin' -exec ls -la {} \; > binlist.txt 2>&1 || true
           tail -c 3000 binlist.txt || true
-          find nuttx -name 'nuttx.bin'                   -exec cp -v {} firmware/ \; 2>/dev/null || true
-          find nuttx -name 'bootloader-esp32s3.bin'      -exec cp -v {} firmware/ \; 2>/dev/null || true
-          find nuttx -name 'partition-table-esp32s3.bin' -exec cp -v {} firmware/ \; 2>/dev/null || true
-          find nuttx -name 'bootloader*.bin'             -exec cp -v {} firmware/ \; 2>/dev/null || true
-          find nuttx -name 'partition*.bin'              -exec cp -v {} firmware/ \; 2>/dev/null || true
-          find nuttx -name 'mcuboot*.bin'                -exec cp -v {} firmware/ \; 2>/dev/null || true
-          find nuttx -name 'nuttx.merged.bin'            -exec cp -v {} firmware/ \; 2>/dev/null || true
+          find nuttx -name 'nuttx.bin' -exec cp -v {} firmware/ \; 2>/dev/null || true
           cp -v binlist.txt firmware/ 2>/dev/null || true
-          # run#41 forensics gap: the Publish step runs only on success and
-          # the logs branch only on failure, so the bootloader make output
-          # was invisible on success.  Ship the build.log tail WITH the
-          # firmware itself (Collect runs `if: always()`).
+          # The Publish step runs only on success and the logs branch only on
+          # failure, so ship the build.log tail WITH the firmware itself
+          # (Collect runs `if: always()`).
           tail -c 3000000 build.log > firmware/build_tail.log 2>/dev/null || true
-          ls -la firmware || true
-          # run#48 forensics: the bootloader built for the first time
-          # (kconfgen fix ac96470 worked -- 108/108, both products landed
-          # in nuttx/), so this merge ran for the FIRST time -- and
-          # failed: its flags were written in esptool 5.x kebab-case
-          # (--flash-mode), but esptool is pinned to 4.8.1 whose argparse
-          # only accepts underscore spelling (--flash_mode; argparse does
-          # not interchange dashes/underscores).  step_outcomes.txt does
-          # not track the Collect step, so this failure was invisible
-          # except for the untouched firmware branch.  Fix: 4.x spelling
-          # + ship the merge transcript as collect.log (failure path
-          # publishes it to the logs branch for forensics).
-          if [ ! -f firmware/nuttx.merged.bin ] && [ -f firmware/bootloader-esp32s3.bin ] && [ -f firmware/partition-table-esp32s3.bin ] && [ -f firmware/nuttx.bin ]; then
-            { python3 -m esptool --chip esp32s3 merge_bin -o firmware/nuttx.merged.bin \
-                --flash_mode dio --flash_freq keep --flash_size keep \
-                0x0 firmware/bootloader-esp32s3.bin 0x8000 firmware/partition-table-esp32s3.bin 0x10000 firmware/nuttx.bin; } > collect.log 2>&1 \
-              || { echo "== MERGE_BIN FAILED, transcript: =="; cat collect.log; exit 1; }
-            echo "MERGE OK"
-          fi
-          cp -v collect.log firmware/ 2>/dev/null || true
+          # Prove which boot path this image was built for.  ESSPRESSIF_
+          # SIMPLE_BOOT=y (and no APP_FORMAT_*) means ROM direct boot, which is
+          # what makes offset 0x0 correct.  If this block ever shows an
+          # APP_FORMAT, the flashing offset changes -- do not ignore it.
+          { echo ""
+            echo "== BOOT FORMAT IN .config (nuttx.bin must be flashed at 0x0) =="
+            grep -E 'APP_FORMAT|SIMPLE_BOOT|PARTITION_TABLE_OFFSET|KERNEL_OFFSET' nuttx/.config \
+              || echo "  (no boot-format symbols found)"
+            echo ""
+            echo "== nuttx.bin =="
+            ls -la nuttx/nuttx.bin 2>/dev/null || echo "  MISSING"
+          } >> firmware/build_tail.log
           ls -la firmware || true
 
       - name: Publish firmware to firmware branch (SSH-pullable)
