@@ -85,7 +85,21 @@ jobs:
 
       - name: Install AI-VOX3 BSP + app (validated staging layout, Make flow)
         id: bsp
+        # ------------------------------------------------------------------
+        # run#58 AND run#59 FORENSICS FAILURE -- FIXED HERE
+        # Both runs failed with `bsp: failure` and we could NOT see why, because
+        # this step's stdout was never captured anywhere.  `Publish build log to
+        # logs branch` only tails build.log / sync.log / init.log, and build.log
+        # is created by the NEXT step -- so the bsp step was a blind spot.
+        # Being blind is what turned one bug into three lost CI cycles.
+        #
+        # Now the whole step body runs inside `{ ... } 2>&1 | tee bsp.log`, so
+        # every command's output (including `set -x` traces and every FATAL
+        # message) lands in bsp.log, which the Publish step below ships.
+        # ------------------------------------------------------------------
         run: |
+          {
+          set -x
           # ------------------------------------------------------------------
           # run#58 POST-MORTEM -- WHY THIS STEP IS SO DEFENSIVE
           # run#58 died here with `bsp: failure`, a bare step status, and NO
@@ -109,7 +123,6 @@ jobs:
           # step ever fails again, the log names the exact block.
           # ------------------------------------------------------------------
           echo "== BSP SECTION 1/3: staging copies =="
-          set -x
           # `openvela/apps` comes from the `apps` repo that `repo sync` fetches;
           # it is NOT part of our team repo.  Create the parents before any
           # copy/write so a missing tree fails LOUD instead of silently.
@@ -124,6 +137,23 @@ jobs:
             echo "== BSP FATAL: openvela/nuttx missing -- repo sync incomplete =="
             exit 1
           fi
+          # Prove the staging sources exist BEFORE copying.  A missing source
+          # here is the most likely cause of a silent abort, and `cp -r` with a
+          # missing source prints only to stderr -- which we now capture, but a
+          # named check is far clearer than a bare cp error.
+          for src in team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3 \
+                     team_repo/staging/apps/examples/desktop_companion \
+                     team_repo/staging/vendor_espressif/boards/esp32s3/common ; do
+            if [ ! -e "$src" ]; then
+              echo "== BSP FATAL: staging source missing: $src =="
+              echo "   (the checkout did not contain it -- check the commit)"
+              echo "   --- team_repo/staging tree ---"
+              find team_repo/staging -maxdepth 4 2>&1 | head -60 || true
+              exit 1
+            fi
+            echo "  staging source OK: $src"
+          done
+          echo "== BSP SECTION 1/3: staging copies =="
           set +x
           cp -r team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3 openvela/vendor/espressif/boards/esp32s3/ai_vox3
           cp -r team_repo/staging/apps/examples/desktop_companion openvela/apps/examples/desktop_companion
@@ -237,6 +267,18 @@ jobs:
           echo "--- apps/examples/Kconfig ---"
           # Diagnostic only.
           cat openvela/apps/examples/Kconfig || true
+          echo "== BSP DONE (all sections) =="
+          } 2>&1 | tee bsp.log
+          # The step's exit status must reflect the BODY, not `tee`.  With
+          # `set -o pipefail` absent, a pipeline's status is the LAST command's
+          # status -- so a failing body would look like success.  `bash -e`
+          # already aborted on the first failing command inside the braces, but
+          # we re-assert the real condition here for clarity.
+          if grep -q '== BSP FATAL' bsp.log; then
+            echo "bsp.log contains a FATAL marker -- failing the step"
+            exit 1
+          fi
+          echo "bsp.log size: $(stat -c%s bsp.log 2>/dev/null || echo '?') bytes"
 
       - name: Build AI-VOX3 openvela config (official m() Makefile chain via VELA_USE_MAKEFILE=1)
         id: build
@@ -584,6 +626,11 @@ jobs:
           mkdir -p /tmp/fw && cd /tmp/fw
           git init -q -b firmware .
           cp "${{ github.workspace }}/openvela/firmware/"* .
+          # Also ship bsp.log on SUCCESS: it is the only proof that the patches
+          # actually landed (PATCH CHECK OK / PATCH VERIFY OK / the elf2image
+          # command line).  Without it we cannot confirm a 5-segment image was
+          # produced by a patched tree rather than an unpatched one.
+          cp "${{ github.workspace }}/openvela/bsp.log" ./bsp.log 2>/dev/null || echo "no bsp.log" > bsp.log
           git add -A
           git commit -q -m "firmware build run #${{ github.run_number }}"
           git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
@@ -602,6 +649,10 @@ jobs:
           echo "build: ${{ steps.build.outcome }} (always success by design; see verdict)" | tee -a step_outcomes.txt
           echo "verdict: ${{ steps.verdict.outcome }}" | tee -a step_outcomes.txt
           tail -c 2000000 openvela/build.log > build_tail.log 2>/dev/null || echo "no build.log" > build_tail.log
+          # bsp.log is the ONLY record of the BSP step's output.  run#58 and
+          # run#59 both failed in that step and we were blind, because nothing
+          # ever captured it -- build.log belongs to the NEXT step.  Ship it.
+          tail -c 2000000 openvela/bsp.log > bsp_tail.log 2>/dev/null || echo "no bsp.log" > bsp_tail.log
           tail -c 2000000 openvela/sync.log > sync_tail.log 2>/dev/null || echo "no sync.log" > sync_tail.log
           tail -c 2000000 openvela/init.log > init_tail.log 2>/dev/null || echo "no init.log" > init_tail.log
           ls -la openvela > dirlist.txt 2>&1 || true
