@@ -223,7 +223,11 @@ jobs:
             grep -rl "LOCK_INITIALIZER_UNLOCKED" "$HALDIR/components" | xargs -r sed -i \
               's/^#define LOCK_INITIALIZER_UNLOCKED[[:space:]]*0[[:space:]]*$/#define LOCK_INITIALIZER_UNLOCKED SP_UNLOCKED/'
             echo "== esp-hal-3rdparty pre-seeded, lock-init patched: =="
-            grep -n "define LOCK_INITIALIZER_UNLOCKED" "$HALDIR/components/esp_hw_support/clk_ctrl_os.c"
+            # `|| true`: this is a DIAGNOSTIC.  grep exits 1 when the pattern
+            # is absent, and under GitHub's `bash -e` that would abort the step
+            # -- turning a cosmetic log line into a hard build failure.  The
+            # patch outcome is verified by the compile itself.
+            grep -n "define LOCK_INITIALIZER_UNLOCKED" "$HALDIR/components/esp_hw_support/clk_ctrl_os.c" || true
           } >> build.log 2>&1 || { echo "== HAL PRESEED FAILED ==" >> build.log; exit 1; }
           echo "HAL PRESEED OK" >> build.log
           # ------------------------------------------------------------------
@@ -257,12 +261,59 @@ jobs:
           export VELA_EXTRA_FLAGS="-Wno-cpp -Wno-deprecated-declarations"
           echo "VELA_USE_MAKEFILE=1 (force _do_makefile_build)" >> build.log
           echo "VELA_EXTRA_FLAGS=$VELA_EXTRA_FLAGS (no -Werror)" >> build.log
+          # ------------------------------------------------------------------
+          # run#54 post-mortem (CORRECTED).  The build SUCCEEDED -- build.log
+          # ends with "#### build completed successfully (02:10 (mm:ss)) ####"
+          # and "M-CHAIN rc=0" -- yet the step was reported as `failure`, so
+          # Publish-firmware (then gated on `if: success()`) was skipped and
+          # the binary was stranded on the runner.
+          #
+          # The real cause was NOT the pipeline.  It was the line right after
+          # the rc capture:
+          #     ls -la nuttx/nuttx nuttx/nuttx.bin 2>/dev/null || true
+          # GitHub runs `run:` blocks with `bash -e {0}`.  `2>/dev/null`
+          # silences ls's OUTPUT but not its EXIT CODE, so when the listing
+          # failed the non-zero status tripped `-e` and killed the script on
+          # the spot.  Reproduced locally under `bash -e`: the log shows
+          # "M-CHAIN rc=0" and then NOTHING -- no `ls` output and no further
+          # lines -- which is exactly the shape of the run#54 tail.
+          #
+          # Fixes applied:
+          #   1. the pipeline runs under `set +e` so its status is always
+          #      captured rather than aborting the step;
+          #   2. every diagnostic command after it is `|| true`-guarded, so a
+          #      failed *log line* can never fail the *build*;
+          #   3. rc is pre-seeded to 127 so an unset value can never be
+          #      mistaken for success;
+          #   4. success is decided from rc AND the artifact, not from a
+          #      shell quirk.
+          # ------------------------------------------------------------------
+          set +e
           set -o pipefail
+          rc=127
           m -j"$(nproc)" 2>&1 | tee -a build.log
           rc=$?
+          set +o pipefail
+          set -e
           echo "M-CHAIN rc=$rc" >> build.log
-          ls -la nuttx/nuttx nuttx/nuttx.bin 2>/dev/null || true
+          ls -la nuttx/nuttx nuttx/nuttx.bin >> build.log 2>&1 || true
           } >> build.log 2>&1
+          # Decide success here, from rc and the artifact alone.
+          if [ "$rc" -ne 0 ]; then
+            echo "== BUILD FAILED: m chain exited $rc ==" >> build.log
+            exit 1
+          fi
+          if [ ! -s nuttx/nuttx.bin ]; then
+            echo "== BUILD FAILED: m exited 0 but nuttx/nuttx.bin is missing/empty ==" >> build.log
+            exit 1
+          fi
+          # Sanity-check the artefact is really an ESP32-S3 image (first byte
+          # 0xE9 is esp_image_header_t.magic) rather than some stray file.
+          if [ "$(head -c1 nuttx/nuttx.bin | od -An -tx1 | tr -d ' \n')" != "e9" ]; then
+            echo "== BUILD FAILED: nuttx.bin does not start with the 0xE9 image magic ==" >> build.log
+            exit 1
+          fi
+          echo "BUILD OK: nuttx/nuttx.bin present ($(stat -c%s nuttx/nuttx.bin) bytes, magic 0xE9, rc=$rc)" >> build.log
 
       - name: Collect firmware
         if: always()
@@ -298,8 +349,32 @@ jobs:
           ls -la firmware || true
 
       - name: Publish firmware to firmware branch (SSH-pullable)
-        if: success()
+        # Gated on the ARTIFACT, not on step status.  run#54 taught us that a
+        # successful build can still be reported as a failed step, and an
+        # `if: success()` gate then strands a perfectly good nuttx.bin on the
+        # runner forever.  Collect already ran (if: always()) and staged the
+        # binary into openvela/firmware/, so publish whenever it is there.
+        #
+        # But "the file exists" is not proof of a good build -- the build step
+        # may have failed AFTER linking, leaving an image behind.  So the gate
+        # is two-fold: the build step must report success, AND the artefact
+        # must carry the ESP32-S3 image magic (0xE9).  A mis-reported step
+        # status is exactly what we are working around, so accept EITHER a
+        # successful step OR a magic-valid image -- never publish something
+        # we cannot vouch for.
+        if: always()
         run: |
+          FW="${{ github.workspace }}/openvela/firmware/nuttx.bin"
+          if ! ls "$FW" >/dev/null 2>&1; then
+            echo "no nuttx.bin staged by Collect -- nothing to publish"
+            exit 0
+          fi
+          magic=$(head -c1 "$FW" | od -An -tx1 | tr -d ' \n')
+          if [ "$magic" != "e9" ]; then
+            echo "staged nuttx.bin has magic '$magic', not 'e9' -- refusing to publish"
+            exit 0
+          fi
+          echo "publishing nuttx.bin ($(stat -c%s "$FW") bytes, magic 0xE9); build step outcome was '${{ steps.build.outcome }}'"
           git config --global user.email "ci@openvela-contest.local"
           git config --global user.name "OpenVela CI"
           mkdir -p /tmp/fw && cd /tmp/fw
@@ -338,6 +413,13 @@ jobs:
           cp "${{ github.workspace }}/sync_tail.log" . 2>/dev/null || true
           cp "${{ github.workspace }}/init_tail.log" . 2>/dev/null || true
           cp "${{ github.workspace }}/dirlist.txt" . 2>/dev/null || true
+          # run#54: a successful build whose step was mis-reported as failed
+          # left the binary stranded.  Collect staged it into
+          # openvela/firmware/ -- ship it here too, so the logs branch is
+          # always a complete record (binary + log) no matter which publish
+          # path fires.
+          cp "${{ github.workspace }}/openvela/firmware/nuttx.bin" . 2>/dev/null || true
+          ls -la nuttx.bin 2>/dev/null || echo "  (no nuttx.bin in logs branch)"
           git add -A
           git commit -q -m "build log run #${{ github.run_number }}"
           git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
