@@ -262,44 +262,51 @@ jobs:
           echo "VELA_USE_MAKEFILE=1 (force _do_makefile_build)" >> build.log
           echo "VELA_EXTRA_FLAGS=$VELA_EXTRA_FLAGS (no -Werror)" >> build.log
           # ------------------------------------------------------------------
-          # run#54 post-mortem (CORRECTED).  The build SUCCEEDED -- build.log
-          # ends with "#### build completed successfully (02:10 (mm:ss)) ####"
-          # and "M-CHAIN rc=0" -- yet the step was reported as `failure`, so
-          # Publish-firmware (then gated on `if: success()`) was skipped and
-          # the binary was stranded on the runner.
+          # run#54/#55 post-mortem.  run#54 built fine but was reported as a
+          # failed step; that was the `ls ... 2>/dev/null` diagnostic tripping
+          # `bash -e` (2>/dev/null silences output, NOT the exit code).
+          # run#55 added `|| true` to that line -- the `ls` output duly
+          # appeared in build.log -- yet the step STILL reported failure, and
+          # neither the "BUILD OK" nor the "BUILD FAILED" verdict line was
+          # written.  So the step is being killed by `-e` somewhere we cannot
+          # see, and no amount of per-line guarding has proven reliable.
           #
-          # The real cause was NOT the pipeline.  It was the line right after
-          # the rc capture:
-          #     ls -la nuttx/nuttx nuttx/nuttx.bin 2>/dev/null || true
-          # GitHub runs `run:` blocks with `bash -e {0}`.  `2>/dev/null`
-          # silences ls's OUTPUT but not its EXIT CODE, so when the listing
-          # failed the non-zero status tripped `-e` and killed the script on
-          # the spot.  Reproduced locally under `bash -e`: the log shows
-          # "M-CHAIN rc=0" and then NOTHING -- no `ls` output and no further
-          # lines -- which is exactly the shape of the run#54 tail.
-          #
-          # Fixes applied:
-          #   1. the pipeline runs under `set +e` so its status is always
-          #      captured rather than aborting the step;
-          #   2. every diagnostic command after it is `|| true`-guarded, so a
-          #      failed *log line* can never fail the *build*;
-          #   3. rc is pre-seeded to 127 so an unset value can never be
-          #      mistaken for success;
-          #   4. success is decided from rc AND the artifact, not from a
-          #      shell quirk.
+          # Stop fighting the shell.  The whole build+verdict sequence now runs
+          # inside an explicit subshell with `set +e`, and it communicates its
+          # result OUT-OF-BAND through a marker file instead of through its
+          # exit status.  `run:` can then always end 0, and the separate
+          # "Decide build outcome" step below turns the marker into the real
+          # pass/fail signal.  Nothing about the build can be lost to a
+          # shell-option interaction again.
           # ------------------------------------------------------------------
-          set +e
-          set -o pipefail
-          rc=127
-          m -j"$(nproc)" 2>&1 | tee -a build.log
-          rc=$?
-          set +o pipefail
-          set -e
-          echo "M-CHAIN rc=$rc" >> build.log
-          ls -la nuttx/nuttx nuttx/nuttx.bin >> build.log 2>&1 || true
-          } >> build.log 2>&1
-          # Decide success here, from rc and the artifact alone.
-          if [ "$rc" -ne 0 ]; then
+          (
+            set +e
+            set -o pipefail
+            rc=127
+            m -j"$(nproc)" 2>&1 | tee -a build.log
+            rc=$?
+            echo "M-CHAIN rc=$rc" >> build.log
+            ls -la nuttx/nuttx nuttx/nuttx.bin >> build.log 2>&1
+            echo "$rc" > build_rc.txt
+          ) >> build.log 2>&1
+          # This step always "succeeds" -- see the verdict step below.
+          exit 0
+
+      - name: Decide build outcome
+        id: verdict
+        working-directory: openvela
+        run: |
+          # Reads the marker the build step wrote, then re-checks the artifact
+          # independently.  This is the ONLY place the build's pass/fail is
+          # decided, so a shell quirk in the build step cannot mark a good
+          # build as failed (or a bad one as good).
+          rc="$(cat build_rc.txt 2>/dev/null || echo MISSING)"
+          echo "build_rc.txt says: $rc" >> build.log
+          if [ "$rc" = "MISSING" ]; then
+            echo "== BUILD FAILED: build step did not write build_rc.txt ==" >> build.log
+            exit 1
+          fi
+          if [ "$rc" != "0" ]; then
             echo "== BUILD FAILED: m chain exited $rc ==" >> build.log
             exit 1
           fi
@@ -307,13 +314,17 @@ jobs:
             echo "== BUILD FAILED: m exited 0 but nuttx/nuttx.bin is missing/empty ==" >> build.log
             exit 1
           fi
-          # Sanity-check the artefact is really an ESP32-S3 image (first byte
-          # 0xE9 is esp_image_header_t.magic) rather than some stray file.
-          if [ "$(head -c1 nuttx/nuttx.bin | od -An -tx1 | tr -d ' \n')" != "e9" ]; then
-            echo "== BUILD FAILED: nuttx.bin does not start with the 0xE9 image magic ==" >> build.log
+          # Verify it really is an ESP32-S3 image: first byte 0xE9 is
+          # esp_image_header_t.magic.  Use `od` output captured to a variable
+          # rather than a pipeline inside `[ ]`, which is fragile under -e.
+          first_byte="$(od -An -tx1 -N1 nuttx/nuttx.bin | tr -d ' \n')"
+          if [ "$first_byte" != "e9" ]; then
+            echo "== BUILD FAILED: nuttx.bin first byte is '$first_byte', expected 'e9' ==" >> build.log
             exit 1
           fi
-          echo "BUILD OK: nuttx/nuttx.bin present ($(stat -c%s nuttx/nuttx.bin) bytes, magic 0xE9, rc=$rc)" >> build.log
+          size="$(stat -c%s nuttx/nuttx.bin)"
+          echo "BUILD OK: nuttx/nuttx.bin present (${size} bytes, magic 0xE9, m rc=$rc)" >> build.log
+          ls -la nuttx/nuttx nuttx/nuttx.bin >> build.log 2>&1
 
       - name: Collect firmware
         if: always()
@@ -355,26 +366,29 @@ jobs:
         # runner forever.  Collect already ran (if: always()) and staged the
         # binary into openvela/firmware/, so publish whenever it is there.
         #
-        # But "the file exists" is not proof of a good build -- the build step
-        # may have failed AFTER linking, leaving an image behind.  So the gate
-        # is two-fold: the build step must report success, AND the artefact
-        # must carry the ESP32-S3 image magic (0xE9).  A mis-reported step
-        # status is exactly what we are working around, so accept EITHER a
-        # successful step OR a magic-valid image -- never publish something
-        # we cannot vouch for.
+        # Publish whenever the verdict step PASSED and Collect staged the
+        # binary.  `if: always()` is required because a failure in an earlier
+        # step would otherwise skip this one even when the artifact is good --
+        # but the verdict outcome is checked explicitly so we never ship an
+        # image the verdict refused.  The 0xE9 magic is re-checked here too:
+        # two independent gates, neither trusting a step's status alone.
         if: always()
         run: |
+          if [ "${{ steps.verdict.outcome }}" != "success" ]; then
+            echo "verdict was '${{ steps.verdict.outcome }}' -- refusing to publish"
+            exit 0
+          fi
           FW="${{ github.workspace }}/openvela/firmware/nuttx.bin"
           if ! ls "$FW" >/dev/null 2>&1; then
             echo "no nuttx.bin staged by Collect -- nothing to publish"
             exit 0
           fi
-          magic=$(head -c1 "$FW" | od -An -tx1 | tr -d ' \n')
+          magic=$(od -An -tx1 -N1 "$FW" | tr -d ' \n')
           if [ "$magic" != "e9" ]; then
             echo "staged nuttx.bin has magic '$magic', not 'e9' -- refusing to publish"
             exit 0
           fi
-          echo "publishing nuttx.bin ($(stat -c%s "$FW") bytes, magic 0xE9); build step outcome was '${{ steps.build.outcome }}'"
+          echo "publishing nuttx.bin ($(stat -c%s "$FW") bytes, magic 0xE9); verdict was '${{ steps.verdict.outcome }}'"
           git config --global user.email "ci@openvela-contest.local"
           git config --global user.name "OpenVela CI"
           mkdir -p /tmp/fw && cd /tmp/fw
@@ -395,7 +409,8 @@ jobs:
           echo "toolchain: ${{ steps.toolchain.outcome }}" | tee -a step_outcomes.txt
           echo "sync: ${{ steps.sync.outcome }}" | tee -a step_outcomes.txt
           echo "bsp: ${{ steps.bsp.outcome }}" | tee -a step_outcomes.txt
-          echo "build: ${{ steps.build.outcome }}" | tee -a step_outcomes.txt
+          echo "build: ${{ steps.build.outcome }} (always success by design; see verdict)" | tee -a step_outcomes.txt
+          echo "verdict: ${{ steps.verdict.outcome }}" | tee -a step_outcomes.txt
           tail -c 2000000 openvela/build.log > build_tail.log 2>/dev/null || echo "no build.log" > build_tail.log
           tail -c 2000000 openvela/sync.log > sync_tail.log 2>/dev/null || echo "no sync.log" > sync_tail.log
           tail -c 2000000 openvela/init.log > init_tail.log 2>/dev/null || echo "no init.log" > init_tail.log
