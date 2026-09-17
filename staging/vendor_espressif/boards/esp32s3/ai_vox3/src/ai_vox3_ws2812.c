@@ -29,19 +29,26 @@
  *
  * THE REAL API (verified): the upper-half RMT character driver exposes
  *
- *     int  rmtchar_register(FAR struct rmt_dev_s *rmt);   /* <nuttx/rmt/rmt.h> */
+ *     int rmtchar_register(FAR struct rmt_dev_s *rmt);   [nuttx/rmt/rmt.h]
  *
  * which registers "/dev/rmt<minor>".  esp_rmt_tx_init() returns the handle
  * but does NOT register anything, so the two calls go together:
  *
- *     dev = esp_rmt_tx_init(0, GPIO41);    /* build + configure the channel */
- *     rmtchar_register(dev);               /* publish /dev/rmt0              */
- *     fd  = open("/dev/rmt0", O_WRONLY);   /* then write() raw 4-byte items  */
+ *     dev = esp_rmt_tx_init(0, GPIO41);    build + configure the channel
+ *     rmtchar_register(dev);               publish /dev/rmt0
+ *     fd  = open("/dev/rmt0", O_WRONLY);   then write() raw 4-byte items
  *
  * The write path asserts (buflen % 4) == 0, i.e. items are 4 bytes each.
  *
- * NOTE: there is no `rmt_put_items()` symbol.  I referenced one in an
+ * NOTE: there is no rmt_put_items() symbol.  I referenced one in an
  * intermediate draft of this file; it does not exist.  Do not reintroduce it.
+ *
+ * NOTE 2: do NOT put nested block comments in this header.  An earlier
+ * revision of this very banner contained "/* <nuttx/rmt/rmt.h> */" inline.
+ * C has no nested comments, so the banner terminated at that inner "*​/"
+ * and the following pseudo-code lines leaked into the compiler as real code
+ * -- producing "unknown type name 'not'" and "implicit declaration of
+ * 'open'" at lines 39/44.  Use bracket notation instead, as above.
  *
  ****************************************************************************/
 
