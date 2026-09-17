@@ -66,13 +66,20 @@ CFLAGS += ${INCDIR_PREFIX}$(TOPDIR)$(DELIM)arch$(DELIM)$(CONFIG_ARCH)$(DELIM)src
 # which still compiles under implicit-int rules and fails later at link time,
 # looking unrelated to the real cause.
 #
-# Use the same idiom upstream uses for its own common/espressif path:
-# ARCH_SRCDIR is the arch source root (arch/xtensa/src), so appending
-# common/espressif reaches the directory holding esp_rmt.h, esp_gpio.h,
-# esp_i2c.h, esp_i2s.h, esp_clk_tree.h and friends.  Gated on the RMT chain
-# so we only widen the search path when the driver is actually built.
+# run#65 follow-up: the first attempt at this line used $(ARCH_SRCDIR), which
+# is the idiom arch/xtensa/src/common/espressif/Make.defs uses for ITSELF.
+# That variable is EMPTY in a board Make.defs -- board Make.defs is evaluated
+# before arch Make.defs, so the expansion silently degenerated to the absolute
+# path "/common/espressif" and GCC ignored it.  Proven from run#65's own
+# command line dump:
+#     '-I' '/common/espressif'   <- ours, a directory that does not exist
+#     '-I' '.../nuttx/arch/xtensa/src/common'   <- upstream's, correct
+# A wrong -I is SILENT: no warning, no error, just an include that cannot be
+# found later.  So spell the path out with the exact same variables the line
+# above uses ($(TOPDIR)/$(CONFIG_ARCH)) -- those are board-context safe, as
+# the pre-existing board include path already proves.
 ifeq ($(CONFIG_ESP_RMT),y)
-CFLAGS += ${INCDIR_PREFIX}$(ARCH_SRCDIR)$(DELIM)common$(DELIM)espressif
+CFLAGS += ${INCDIR_PREFIX}$(TOPDIR)$(DELIM)arch$(DELIM)$(CONFIG_ARCH)$(DELIM)src$(DELIM)common$(DELIM)espressif
 endif
 
 # Board-local headers ("board.h" lives in the board include/ directory).
