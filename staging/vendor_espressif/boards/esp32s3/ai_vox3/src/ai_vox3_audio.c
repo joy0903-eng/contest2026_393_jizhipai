@@ -108,14 +108,28 @@ int ai_vox3_audio_initialize(void)
       return -ENODEV;
     }
 
-  /* Register the audio device so the framework can open it. */
-  ret = audio_register(0, g_audio_codec);
+  /* Register the audio device so the framework can open it.
+   *
+   * 2026-09-17: this call used to be `audio_register(0, g_audio_codec)`.
+   * The first parameter is `FAR const char *name`, NOT an index, so the
+   * literal 0 was passed as a NULL pointer and audio_register() bailed out
+   * on its own guard:
+   *     if (!name || !dev) { auderr("ERROR: Invalid arguments"); return -EINVAL; }
+   * Result: -EINVAL on every boot, /dev/audio/pcm0 never created, and all of
+   * audio_pipeline.c silently non-functional.  Pass the name string instead;
+   * audio_register() prepends "/dev/audio/" itself, yielding /dev/audio/pcm0
+   * (matching AUDIO_DEV in the app and the upstream pcm[x] convention where
+   * x is the I2S port number -- this board uses I2S0).
+   */
+  ret = audio_register(BOARD_AUDIO_DEV_NAME, g_audio_codec);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: audio_register failed: %d\n", ret);
+      syslog(LOG_ERR, "ERROR: audio_register(\"%s\") failed: %d\n",
+             BOARD_AUDIO_DEV_NAME, ret);
       return ret;
     }
 
-  syslog(LOG_INFO, "Audio (ES8311 + I2S) initialized\n");
+  syslog(LOG_INFO, "Audio (ES8311 + I2S) initialized, node /dev/audio/%s\n",
+         BOARD_AUDIO_DEV_NAME);
   return OK;
 }

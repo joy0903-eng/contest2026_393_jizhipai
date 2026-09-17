@@ -3,10 +3,28 @@
  *
  * ES8311 audio pipeline: capture (RX) + playback (TX) + prompt tones.
  *
- * NOTE: NuttX audio typically requires AUDIOIOC_SETAUDIOINFO to configure the
- * format before write()/read(). This implementation opens /dev/audio/pcm0 and
- * performs raw read/write; the exact format ioctl is flagged with TODO so it
- * can be matched to the ES8311 default (16 kHz / 16-bit / mono) on real HW.
+ * NOTE on the ioctl to use for format setup.  An earlier revision of this
+ * comment said "AUDIOIOC_SETAUDIOINFO".  That token DOES NOT EXIST in
+ * include/nuttx/audio/audio.h -- and in this codebase a wrong symbol is not a
+ * compile error you notice, it is a silent feature loss.  The tokens that do
+ * exist upstream are:
+ *
+ *   AUDIOIOC_CONFIGURE       _AUDIOIOC(4)   configure device for a mode
+ *   AUDIOIOC_GETCAPS         _AUDIOIOC(1)   query capabilities
+ *   AUDIOIOC_START           _AUDIOIOC(6)   start streaming
+ *   AUDIOIOC_STOP            _AUDIOIOC(7)   stop streaming
+ *   AUDIOIOC_GETBUFFERINFO   _AUDIOIOC(10)  buffer geometry
+ *   AUDIOIOC_SETBUFFERINFO   _AUDIOIOC(17)  buffer geometry
+ *   AUDIOIOC_SETPARAMTER     _AUDIOIOC(18)  set stream params
+ *                            ^^ note the upstream spelling: "SETPARAMTER",
+ *                            missing the E.  Not our typo -- do not "fix" it,
+ *                            grepping for AUDIOIOC_SETPARAMETER finds nothing.
+ *   AUDIOIOC_GETAUDIOINFO    _AUDIOIOC(22)  read back the active audio info
+ *
+ * The device node is /dev/audio/pcm0 and it is created by
+ * audio_register(BOARD_AUDIO_DEV_NAME, ...) in the board's
+ * ai_vox3_audio.c -- which until 2026-09-17 passed a literal 0 as the name
+ * and therefore never registered anything at all.
  *
  ****************************************************************************/
 
@@ -75,9 +93,15 @@ int audio_init(void)
       return -errno;
     }
 
-  /* TODO(real-device): configure the ES8311 format via
-   *   struct audio_caps_s caps; ioctl(g_audio_fd, AUDIOIOC_SETAUDIOINFO, ...)
-   * with AIVOX3_AUDIO_RATE / 16-bit / mono so playback/capture match. */
+  /* TODO(real-device): configure the ES8311 stream format before read/write.
+   *
+   * Use AUDIOIOC_CONFIGURE (token _AUDIOIOC(4)) with a struct audio_caps_s
+   * carrying AIVOX3_AUDIO_RATE / 16-bit / mono, and AUDIOIOC_START to begin
+   * streaming.  Do NOT use AUDIOIOC_SETAUDIOINFO -- that token does not exist
+   * (see the file header).  Left unwritten on purpose: the codec's own
+   * defaults are already 16 kHz/16-bit, and we want the first real-device
+   * run to tell us whether format setup is actually needed before adding it.
+   */
   return OK;
 }
 

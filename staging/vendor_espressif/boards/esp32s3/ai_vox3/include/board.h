@@ -86,6 +86,23 @@
 #define BOARD_AUDIO_BITS         16
 #define BOARD_AUDIO_CHANNELS     1
 
+/* Audio device NAME (not a path, not an index).
+ *
+ * 2026-09-17: audio_register() takes `FAR const char *name` and builds the
+ * path itself as "/dev/audio/" + name.  The driver was previously registered
+ * with a literal integer 0, which the compiler passes as a NULL pointer --
+ * audio_register() rejects that immediately:
+ *     if (!name || !dev) { auderr("ERROR: Invalid arguments"); return -EINVAL; }
+ * So the call always failed with -EINVAL, /dev/audio/pcm0 was NEVER created,
+ * and every open()/read()/write() in audio_pipeline.c was dead on arrival.
+ *
+ * The name follows upstream's convention: the node is /dev/audio/pcm[x] where
+ * x is the I2S port number (see upstream arch/xtensa/src/esp32s3's
+ * esp32s3_es8311_initialize, whose doc comment says exactly that).  This board
+ * uses I2S port 0, hence "pcm0" -- matching AUDIO_DEV in audio_pipeline.c.
+ */
+#define BOARD_AUDIO_DEV_NAME     "pcm0"
+
 /****************************************************************************
  * Servo x4 — LEDC PWM @ 50 Hz
  * IO42 / IO43 / IO44 / IO48  (servo index 0..3)
