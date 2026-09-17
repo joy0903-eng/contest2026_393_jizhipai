@@ -62,6 +62,44 @@ extern "C"
 #define VAD_MAX_WORD_SAMPLES  (VAD_MAX_WORD_MS * DSP_SAMPLE_RATE / 1000) /* 44800 */
 
 /****************************************************************************
+ * Concurrency and lifecycle invariants
+ *
+ * These are contractual, not incidental.  They were established together
+ * with the owner of the audio capture thread; breaking one of them does not
+ * produce a crash, it produces occasional mis-recognition, which is much
+ * harder to diagnose.
+ *
+ *   INV-1  Single consumer.  dsp_vad_trim(), dsp_mfcc_compute() and every
+ *          kws_* entry point use module-static scratch areas (no heap
+ *          allocation on the hot path), so at most one thread at a time may
+ *          execute them.
+ *
+ *   INV-2  dsp_vad_feed() must not run concurrently with any of the above.
+ *          feed() reaches dsp_vad_trim() through
+ *          feed -> vad_process_frame -> vad_finish_capture -> dsp_vad_trim
+ *          and therefore shares the same scratch.  A producer that keeps
+ *          feeding while a consumer is classifying is racy.
+ *
+ *   INV-3  Utterances are delivered already trimmed.  dsp_vad_trim() is
+ *          applied inside vad_finish_capture() before the ready flag is
+ *          set, and the ready flag is set in exactly that one place.  Do
+ *          NOT trim again on the consumer side: the second pass re-applies
+ *          the same 18% threshold and eats the deliberate 3-frame (60 ms)
+ *          margin, shortening the first/last syllable and inflating the DTW
+ *          distance.
+ *
+ *   INV-4  Dereferencing is fail-closed across deinit.  dsp_vad_deinit()
+ *          clears the endpointing state before releasing "ready", so after
+ *          deinit every accessor (dsp_vad_word(), dsp_vad_take_word())
+ *          returns NULL / 0 and never hands out the freed buffer.
+ *
+ *   INV-5  The learned noise floor survives dsp_vad_reset() (only
+ *          dsp_vad_init() re-seeds it).  Stopping and restarting capture,
+ *          e.g. around half-duplex playback, therefore does not reset the
+ *          ambient adaptation.
+ ****************************************************************************/
+
+/****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
@@ -84,6 +122,11 @@ int dsp_vad_init(void);
  *
  * Description:
  *   Release the utterance buffer and stop the detector.
+ *
+ *   All endpointing state is invalidated before the module publishes
+ *   "not ready" (see INV-4 above), so any consumer that races this call
+ *   observes dsp_vad_word() == NULL / dsp_vad_take_word() == 0 instead of
+ *   a pointer to freed memory.  Safe to call on an uninitialised module.
  *
  ****************************************************************************/
 
@@ -167,9 +210,18 @@ int dsp_vad_take_word(int16_t *out, int capacity);
  * Name: dsp_vad_word
  *
  * Description:
- *   Zero-copy accessor: returns a pointer to the pending utterance (valid
- *   until the next dsp_vad_feed()) and, if out_samples is non-NULL, its
- *   length in samples. NULL when nothing is pending.
+ *   Zero-copy accessor: returns a pointer to the pending utterance and, if
+ *   out_samples is non-NULL, its length in samples. NULL when nothing is
+ *   pending.
+ *
+ *   Ownership stays with this module. The contents are only stable while
+ *   the producer keeps dsp_vad_feed() suspended (see INV-2); they become
+ *   undefined after the next dsp_vad_feed(), dsp_vad_reset() or
+ *   dsp_vad_deinit(). The pointer must never be dereferenced after the
+ *   module has been deinitialised (INV-4).
+ *
+ *   The caller may modify the samples in place, but note that the
+ *   utterance has already been trimmed (INV-3).
  *
  ****************************************************************************/
 
