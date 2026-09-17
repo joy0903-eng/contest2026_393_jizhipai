@@ -163,12 +163,79 @@ jobs:
           grep -E '^CONFIG_(AUDIO|DRIVERS_AUDIO|I2C|I2S|ES8311|LCD_ST7789|ESP32S3_SPI2|ESP32S3_APP_FORMAT|ESPRESSIF)' nuttx/.config >> build.log || true
           # Diagnostics for the run#32 link fixes (A: task_tls, B: nxmutex):
           grep -E 'NOINLINE|TLS_TASK_NELEM' nuttx/.config >> build.log || true
-          for sym in CONFIG_AUDIO=y CONFIG_DRIVERS_AUDIO=y CONFIG_AUDIO_ES8311=y CONFIG_AUDIO_I2S=y CONFIG_I2C=y CONFIG_I2S=y CONFIG_ESP32S3_I2C0=y CONFIG_ESP32S3_I2C0_MASTER_MODE=y CONFIG_ESPRESSIF_I2C_PERIPH_MASTER_MODE=y CONFIG_ESP32S3_I2S=y CONFIG_ESP32S3_SPI2=y CONFIG_LCD_ST7789=y CONFIG_AI_VOX3_SERVO=y CONFIG_AI_VOX3_BUTTONS=y CONFIG_ESP32S3_LEDC=y CONFIG_ESP32S3_LEDC_TIM0=y CONFIG_ESP32S3_LEDC_TIM0_CHANNELS=1 CONFIG_ESP32S3_LEDC_CHANNEL0_PIN=42 CONFIG_ESP32S3_LEDC_CHANNEL1_PIN=43 CONFIG_ESP32S3_LEDC_CHANNEL2_PIN=44 CONFIG_ESP32S3_LEDC_CHANNEL3_PIN=48 CONFIG_ESP32S3_GPIO_IRQ=y CONFIG_TLS_TASK_NELEM=8 CONFIG_ESP32S3_APP_FORMAT_LEGACY=y CONFIG_ESP32S3_USBSERIAL=y CONFIG_ESP32S3_SPIRAM=y CONFIG_ESP32S3_SPIRAM_MODE_OCT=y CONFIG_ESP32S3_SPIRAM_SPEED_40M=y CONFIG_INIT_ENTRYPOINT='"desktop_companion_main"'; do
+          for sym in CONFIG_AUDIO=y CONFIG_DRIVERS_AUDIO=y CONFIG_AUDIO_ES8311=y CONFIG_AUDIO_I2S=y CONFIG_I2C=y CONFIG_I2S=y CONFIG_ESP32S3_I2C0=y CONFIG_ESP32S3_I2C0_MASTER_MODE=y CONFIG_ESPRESSIF_I2C_PERIPH_MASTER_MODE=y CONFIG_ESP32S3_I2S=y CONFIG_ESP32S3_SPI2=y CONFIG_LCD_ST7789=y CONFIG_AI_VOX3_SERVO=y CONFIG_AI_VOX3_BUTTONS=y CONFIG_ESP32S3_LEDC=y CONFIG_ESP32S3_LEDC_TIM0=y CONFIG_ESP32S3_LEDC_TIM0_CHANNELS=1 CONFIG_ESP32S3_LEDC_CHANNEL0_PIN=42 CONFIG_ESP32S3_LEDC_CHANNEL1_PIN=43 CONFIG_ESP32S3_LEDC_CHANNEL2_PIN=44 CONFIG_ESP32S3_LEDC_CHANNEL3_PIN=48 CONFIG_ESP32S3_GPIO_IRQ=y CONFIG_TLS_TASK_NELEM=8 CONFIG_ESP32S3_APP_FORMAT_LEGACY=y CONFIG_ESP32S3_USBSERIAL=y CONFIG_INIT_ENTRYPOINT='"desktop_companion_main"'; do
             grep -qx "$sym" nuttx/.config || { echo "== CONFIG AUDIT FAILED: $sym not in .config ==" >> build.log; exit 1; }
           done
+          # run#52 BISECT NEGATIVE AUDIT: PSRAM must be OFF for this run.
+          # (The three positive SPIRAM entries were removed from the list above
+          # on purpose -- asserting them would now fail the build.)  If PSRAM
+          # ever sneaks back in, the bisect result becomes uninterpretable.
+          grep -qx '# CONFIG_ESP32S3_SPIRAM is not set' nuttx/.config || { echo "== CONFIG AUDIT FAILED: SPIRAM must be OFF for run#52 bisect ==" >> build.log; exit 1; }
+          grep -qx '# CONFIG_LVGL_BUFFER_ALLOC_EXTERNAL is not set' nuttx/.config || { echo "== CONFIG AUDIT FAILED: LVGL_BUFFER_ALLOC_EXTERNAL must be OFF when SPIRAM is off ==" >> build.log; exit 1; }
           # nxmutex link fix (run#31): the mutex impl must stay inline.
           grep -qx '# CONFIG_LIBC_SEM_MUTEX_NOINLINE is not set' nuttx/.config || { echo "== CONFIG AUDIT FAILED: CONFIG_LIBC_SEM_MUTEX_NOINLINE must be off ==" >> build.log; exit 1; }
           echo "CONFIG AUDIT OK" >> build.log
+          # ------------------------------------------------------------------
+          # run#52: BOOTLOADER CONSOLE -> USB-Serial/JTAG  (diagnostic)
+          # ------------------------------------------------------------------
+          # Why: on this board the 2nd-stage IDF bootloader defaults to
+          # CONFIG_ESP_CONSOLE_UART (UART0 = GPIO43/44).  The AI-VOX3 has no
+          # USB-UART bridge on those pins -- only the native USB-Serial/JTAG
+          # port (GPIO19/20) is exposed as COM4 -- so every bootloader message
+          # has been invisible, which is exactly why a dead bootloader and a
+          # dead NuttX look identical from the host (0 bytes on COM4).
+          #
+          # Mechanism (verified in the fork's arch/xtensa/src/esp32s3/
+          # Bootloader.mk + espressif/esp-nuttx-bootloader build_idfboot.sh):
+          #   * Bootloader.mk generates `bootloader.conf` from nuttx/.config;
+          #     its LEGACY block writes ONLY the flash size/mode/freq and the
+          #     partition-table settings -- no console line at all.
+          #   * build_idfboot.sh passes `-f bootloader.conf` straight through
+          #     as cmake's -DSDKCONFIG_DEFAULTS, so whatever is in that file
+          #     wins over the bootloader repo's own sdkconfig.defaults.
+          #   * Therefore appending $(call cfg_en,CONFIG_ESP_CONSOLE_USB_
+          #     SERIAL_JTAG) to the LEGACY block makes the generated conf
+          #     carry CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y (cfg_en emits
+          #     "=<1|y>" in the MCUBOOT case and "=y" otherwise), and the
+          #     bootloader logs land on COM4 where we can actually read them.
+          #
+          # Soft-fail by design: if the fork's Bootloader.mk ever changes
+          # shape we want a NOISY SKIP, never a broken build.
+          # ------------------------------------------------------------------
+          python3 - <<'PYEOF' >> build.log 2>&1 || echo "BOOTLOADER CONSOLE PATCH STEP ERRORED (non-fatal)" >> build.log
+          import pathlib, sys
+
+          mk = pathlib.Path("nuttx/arch/xtensa/src/esp32s3/Bootloader.mk")
+          anchor = (
+              "\t\t$(call cfg_val,CONFIG_PARTITION_TABLE_OFFSET,"
+              "$(CONFIG_ESP32S3_PARTITION_TABLE_OFFSET)) \\\n"
+          )
+          inject = "\t\t$(call cfg_en,CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG) \\\n"
+
+          if not mk.is_file():
+              print("BOOTLOADER CONSOLE PATCH SKIPPED: %s not found" % mk)
+              sys.exit(0)
+
+          text = mk.read_text()
+          if "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG" in text:
+              print("BOOTLOADER CONSOLE PATCH SKIPPED: already present")
+              sys.exit(0)
+
+          if anchor not in text:
+              print("BOOTLOADER CONSOLE PATCH SKIPPED: anchor not found")
+              idx = text.find("PARTITION_TABLE_CUSTOM")
+              print("--- Bootloader.mk context around PARTITION_TABLE ---")
+              print(text[max(0, idx - 600): idx + 600] if idx >= 0 else text[-1200:])
+              sys.exit(0)
+
+          mk.write_text(text.replace(anchor, anchor + inject, 1))
+          print("BOOTLOADER CONSOLE PATCH APPLIED")
+          for n, line in enumerate(mk.read_text().splitlines(), 1):
+              if "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG" in line:
+                  print("  patched line %d: %s" % (n, line.strip()))
+          PYEOF
+          echo "== bootloader console patch probe ==" >> build.log
+          grep -n 'CONFIG_ESP_CONSOLE' nuttx/arch/xtensa/src/esp32s3/Bootloader.mk >> build.log || echo "  (no CONFIG_ESP_CONSOLE line in Bootloader.mk)" >> build.log
           # ------------------------------------------------------------------
           # Pre-seed esp-hal-3rdparty at the pinned commit and fix its lock
           # initializer BEFORE the build's own clone step (run#23/#24):

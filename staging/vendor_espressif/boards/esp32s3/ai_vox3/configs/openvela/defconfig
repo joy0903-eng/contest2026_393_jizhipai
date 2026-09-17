@@ -33,14 +33,28 @@ CONFIG_ARCH_BOARD_CUSTOM_NAME="ai_vox3"
 
 CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
 CONFIG_ESP32S3_FLASH_16M=y
-CONFIG_ESP32S3_SPIRAM=y
-CONFIG_ESP32S3_SPIRAM_MODE_OCT=y
-# 2026-09-17: run#50 silence = NuttX never reached serial init; the only big
-# hardware step before console init is the OCTAL PSRAM bring-up.  80MHz was
-# our own choice (Arduino FQBN parity) and is UNTESTED in this fork on this
-# board; the fork's ESP32S3_SPIRAM_SPEED choice DEFAULT is 40MHz.  Drop to
-# 40M first (timing-marginality suspects die here).
-CONFIG_ESP32S3_SPIRAM_SPEED_40M=y
+
+# --- run#52 BISECT: OCTAL PSRAM OFF ------------------------------------------
+# 2026-09-17 real-device evidence chain: run#50 and run#51 both boot to a
+# totally dark LCD (no backlight => board bringup never ran) and COM4 prints
+# ZERO bytes for hours; a full-system USB enumeration shows ONLY COM4
+# (303A:1001 USB-Serial/JTAG) and never any new CDC port, so NuttX never
+# reached OTG/USB-console init either.
+#
+# Remaining suspects are the two big steps that run BEFORE the console can
+# possibly come up:
+#   (a) OCTAL PSRAM early initialisation (arch chip init, pre-console), and
+#   (b) the 2nd-stage IDF bootloader failing to load/jump.
+# run#51 already dropped the PSRAM speed 80M -> 40M and stayed silent, so
+# speed is not it; the next cheapest discriminator is to take PSRAM out of
+# the picture entirely.  Keep the three symbols OFF for run#52; if the board
+# lights up, PSRAM bring-up is the root cause and we re-enable it carefully
+# (30M/20M, different pins) as a follow-up.  If the board is STILL dark but
+# the patched bootloader now prints on COM4, PSRAM is exonerated and we look
+# at the bootloader/app load path instead.
+# CONFIG_ESP32S3_SPIRAM is not set
+# CONFIG_ESP32S3_SPIRAM_MODE_OCT is not set
+# CONFIG_ESP32S3_SPIRAM_SPEED_40M is not set
 
 # --- Boot format: LEGACY IDF bootloader (run#40/#41 root cause) --------------
 # Kconfig (arch/xtensa/src/esp32s3/Kconfig, verbatim): the hidden symbol
@@ -94,7 +108,10 @@ CONFIG_LCD_PORTRAIT=y
 # TODO(real-device): confirm ST7789 color order (RGB/BGR) & rotation.
 CONFIG_GRAPHICS_LVGL=y
 CONFIG_LVGL_COLOR_DEPTH=16
-CONFIG_LVGL_BUFFER_ALLOC_EXTERNAL=y
+# run#52: PSRAM is off for the bisect (see the PSRAM block above), so LVGL must
+# NOT try to allocate its draw buffers from external RAM -- the allocation
+# would fail and could itself hang/crash the UI bringup, muddying the result.
+# CONFIG_LVGL_BUFFER_ALLOC_EXTERNAL is not set
 CONFIG_LVGL_USE_DEMO_WIDGETS=y
 CONFIG_EXAMPLES_LVGLDEMO=y
 CONFIG_EXAMPLES_FB=y
