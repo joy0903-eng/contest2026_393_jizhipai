@@ -236,6 +236,31 @@ CONFIG_ESP32S3_LEDC_CHANNEL3_PIN=48
 CONFIG_AI_VOX3_BUTTONS=y
 CONFIG_ESP32S3_GPIO_IRQ=y
 
+# --- WS2812 RGB status LED ---------------------------------------------------
+# 2026-09-17 real-device forensics: this symbol was MISSING, so board.c's
+# `#ifdef CONFIG_AI_VOX3_WS2812` block was preprocessed away and
+# ai_vox3_ws2812_initialize() was never called -- the on-board LED stayed dark
+# even on a healthy boot.  The Arduino firmware lit this LED (pink flash /
+# blue breathe), so a dark LED after moving to OpenVela was reported by the
+# user as "the board is dead".  It was simply never compiled in.
+#
+# The board's own Kconfig (ai_vox3/Kconfig:28) says verbatim:
+#     "Requires CONFIG_ESP32S3_RMT to be enabled in the defconfig."
+# That symbol does NOT exist upstream -- verified against
+# arch/xtensa/src/esp32s3/Kconfig and arch/xtensa/src/common/espressif/Kconfig,
+# neither of which defines any ESP32S3_RMT symbol.  The real two-level chain is:
+#
+#   CONFIG_RMT                    drivers/rmt/Kconfig       (upper-half char drv)
+#     +-- CONFIG_ESP_RMT          common/espressif/Kconfig  (bool, depends on RMT)
+#           the Make.defs gate is: ifeq ($(CONFIG_ESP_RMT),y) -> esp_rmt.c
+#
+# So BOTH must be set.  A bare CONFIG_ESP_RMT without CONFIG_RMT is silently
+# dropped by olddefconfig (its `depends on RMT` is unmet) -- which is exactly
+# the failure mode that hid this bug.  Enable the full chain:
+CONFIG_RMT=y
+CONFIG_ESP_RMT=y
+CONFIG_AI_VOX3_WS2812=y
+
 # --- Force nxmutex inline path (run#31 link fix) -----------------------------
 # include/nuttx/mutex.h: with CONFIG_LIBC_SEM_MUTEX_NOINLINE=y every
 # nxmutex_* call compiles to an extern reference whose implementation lives

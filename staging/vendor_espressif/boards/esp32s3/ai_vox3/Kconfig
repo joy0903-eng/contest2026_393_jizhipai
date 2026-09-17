@@ -25,7 +25,17 @@ config AI_VOX3_WS2812
 	bool "Enable WS2812 RGB LED (RMT) support"
 	default n
 	---help---
-		Requires CONFIG_ESP32S3_RMT to be enabled in the defconfig.
+		Requires the Espressif RMT chain to be enabled in the defconfig:
+		CONFIG_RMT (upper-half char driver, drivers/rmt/Kconfig) AND
+		CONFIG_ESP_RMT (lower-half, depends on RMT).
+
+		NOTE: an earlier revision of this help text said
+		"Requires CONFIG_ESP32S3_RMT".  That symbol does NOT exist in
+		upstream nuttx -- there is no ESP32S3_RMT anywhere in
+		arch/xtensa/src/esp32s3/Kconfig or the shared espressif Kconfig.
+		Following that stale hint silently produced a defconfig with no
+		RMT at all (olddefconfig dropped it), leaving the on-board LED
+		dark on a healthy boot.  Use CONFIG_RMT + CONFIG_ESP_RMT.
 
 config AI_VOX3_BUTTONS
 	bool "Enable on-board buttons (input GPIO) support"

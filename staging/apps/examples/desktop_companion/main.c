@@ -179,7 +179,20 @@ int main(int argc, char *argv[])
     }
 
   /* --- Bring up subsystems --- */
-  ui_init();
+  /* 2026-09-17 real-device forensics: this call used to be a bare
+   * `ui_init();` with the return value thrown away.  ui_lvgl.c:74 returns
+   * -ENODEV when no LVGL display is registered, and every later
+   * ui_set_status()/ui_set_expression()/ui_refresh() then hits
+   * `if (!g_ui_ready) return;` and does NOTHING.  Net effect: a permanently
+   * black screen with zero error output anywhere -- the user reported it as
+   * "the board is dead".  Never let this fail silently again.
+   */
+  ret = ui_init();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: ui_init failed: %d -- UI will be BLANK\n", ret);
+    }
+
   net_init();
   audio_init();
   face_follow_enable(true);
