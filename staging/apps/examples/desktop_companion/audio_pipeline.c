@@ -284,13 +284,16 @@ static void capture_cb(const int16_t *samples, int nsamples, void *arg)
 
       g_dsp_skipped = 0;
 
-      /* dsp_vad_feed() may reach dsp_vad_trim() internally
-       * (feed -> vad_process_frame -> vad_finish_capture -> dsp_vad_trim),
-       * which shares a module-static workspace with the consumer's
-       * kws_recognize().  The g_word_pending gate below is therefore not
-       * just about buffer stability - it is what keeps feed() and the
-       * consumer from running concurrently.  Removing it produces
-       * occasional silent mis-recognition rather than a crash.
+      /* INV-2 (see dsp_vad.h): dsp_vad_feed() may reach dsp_vad_trim()
+       * internally (feed -> vad_process_frame -> vad_finish_capture ->
+       * dsp_vad_trim), sharing a module-static workspace with the
+       * consumer's kws_recognize().  Keeping the chain spelled out here
+       * because this is where it is enforced.
+       *
+       * The g_word_pending gate below is therefore not just about buffer
+       * stability - it is what keeps feed() and the consumer from running
+       * concurrently.  Removing it yields occasional silent
+       * mis-recognition rather than a crash, which is far worse to debug.
        */
 
       r = dsp_vad_feed(samples, nsamples);
@@ -478,6 +481,18 @@ int audio_init(void)
   if (dsp_vad_init() == OK)
     {
       g_dsp_on = true;
+
+      /* Reset explicitly.
+       *
+       * dsp_vad_init() early-returns OK when the VAD is already
+       * initialised - which is exactly what happens when a previous
+       * audio_deinit() had to skip dsp_vad_deinit() (the bounded-wait
+       * timeout path) and therefore left s_vad_ready set with its buffer
+       * still allocated.  Reusing that session is fine and avoids leaking
+       * more, but the endpointing state must not survive into a new one.
+       */
+
+      (void)dsp_vad_reset();
       syslog(LOG_INFO, "audio: dsp_vad tap enabled\n");
     }
   else
@@ -710,12 +725,15 @@ int audio_capture_take_word(int16_t *out, int capacity)
       return -EINVAL;
     }
 
-  if (!g_dsp_on)
-    {
-      return -EAGAIN;
-    }
+  /* Same under-lock g_dsp_on check as audio_capture_process_word(). */
 
   pthread_mutex_lock(&g_dsp_lock);
+
+  if (!g_dsp_on)
+    {
+      pthread_mutex_unlock(&g_dsp_lock);
+      return -EAGAIN;
+    }
 
   if (!g_word_pending)
     {
@@ -775,12 +793,23 @@ int audio_capture_process_word(audio_word_fn_t fn, void *arg)
       return -EINVAL;
     }
 
-  if (!g_dsp_on)
-    {
-      return -EAGAIN;
-    }
+  /* Check g_dsp_on *under* the lock, not before it.
+   *
+   * audio_deinit() clears g_dsp_on and then waits for an in-flight
+   * callback.  A consumer that had already passed an unlocked check could
+   * otherwise still take the lock afterwards and be handed an utterance
+   * from a VAD that is being torn down.  dsp_vad_deinit() fails closed, so
+   * this is defence in depth: the two sides are now independent, and
+   * breaking either one alone is not enough to cause a UAF.
+   */
 
   pthread_mutex_lock(&g_dsp_lock);
+
+  if (!g_dsp_on)
+    {
+      pthread_mutex_unlock(&g_dsp_lock);
+      return -EAGAIN;
+    }
 
   if (!g_word_pending)
     {

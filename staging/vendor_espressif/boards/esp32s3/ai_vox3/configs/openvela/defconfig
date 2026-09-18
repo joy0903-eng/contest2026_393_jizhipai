@@ -209,8 +209,25 @@ CONFIG_NETUTILS_DHCPC=y
 CONFIG_NETUTILS_DNS=y
 CONFIG_NETUTILS_NTPCLIENT=y
 CONFIG_NETUTILS_WEBCLIENT=y
+
+# --- Wi-Fi ioctl path ------------------------------------------------------
+# 2026-09-18: two hidden dependencies were silently dropped by olddefconfig.
+# (a) esp_wlan.c wraps wlan_ioctl() in #ifdef CONFIG_NETDEV_IOCTL; with it off
+#     netdev->d_ioctl is NULL and every SIOCSIWESSID/SIOCSIWENCODEEXT returns
+#     -ENOTTY, so wlan0 can never associate.  NETDEV_WIRELESS_IOCTL selects
+#     NETDEV_IOCTL for us.
+# (b) CONFIG_WIRELESS_WAPI depends on NET && DRIVERS_WIRELESS.  DRIVERS_WIRELESS
+#     is default n, so defconfig's CONFIG_WIRELESS_WAPI=y was being discarded
+#     (this project's known "olddefconfig silently drops unmet deps" trap) and
+#     the wapi library was never built.
+CONFIG_DRIVERS_WIRELESS=y
+CONFIG_NETDEV_WIRELESS_IOCTL=y
 CONFIG_WIRELESS_WAPI=y
 CONFIG_SYSTEM_WPA_NAMES=y
+
+# Kept for reference only: with CONFIG_INIT_ENTRYPOINT="desktop_companion_main"
+# the NSH startup chain never runs, so NSH netinit is DEAD config.  Wi-Fi is
+# brought up in-process by net_services.c:net_init() instead.
 CONFIG_NSH_NETINIT=y
 CONFIG_NSH_NETINIT_WAPI=y
 
@@ -306,6 +323,23 @@ CONFIG_EXAMPLES_DESKTOP_COMPANION=y
 CONFIG_AIVOX3_LLM_API_KEY=""
 # TODO(real-device/build): provide the real key via `make menuconfig` or an
 # NVS injected value; the build must NOT commit the secret to git.
+
+# --- Wi-Fi station credentials ---------------------------------------------
+# Used by net_services.c:net_init() -> net_wifi_connect().  WPA2-PSK.
+# Same convention as the LLM key above: build-time config, never a literal in
+# a .c file.  Empty => net_init() fails fast with a syslog reason (no hang).
+CONFIG_AIVOX3_WIFI_SSID="3124"
+CONFIG_AIVOX3_WIFI_PASSWORD="rczzzhr312"
+
+# --- PC voice bridge ---------------------------------------------------------
+# Host running toolchain/voice_bridge/bridge_chat.py.  Home routers hand out
+# DHCP leases, so this WILL go stale -- override at runtime from the USB-CDC
+# console with:  bridge 192.168.1.42 8765
+CONFIG_AIVOX3_BRIDGE_HOST="192.168.110.205"
+CONFIG_AIVOX3_BRIDGE_PORT=8765
+# Socket inactivity timeout.  A measured turn is 8.3 s (real speech) to
+# 18.2 s (text); the bridge's own LLM timeout is (5,40).  60 s is safe.
+CONFIG_AIVOX3_BRIDGE_TIMEOUT=60
 
 # --- NSH base ----------------------------------------------------------------
 CONFIG_BOARDCTL=y

@@ -6,8 +6,27 @@
  * - Weather uses Open-Meteo (api.open-meteo.com) which needs NO API key,
  *   fetched through the local http_util (plain HTTP).
  * - NTP uses the apps netutils NTP client daemon (ntpc_start).
- * - Wi-Fi association is a placeholder (-ENOSYS) until the esp32s3 wext
- *   passkey path is wired up; net_is_connected works via netlib.
+ * - Wi-Fi station association is performed in-process. Because this board
+ *   boots straight into desktop_companion_main
+ *   (CONFIG_INIT_ENTRYPOINT="desktop_companion_main", defconfig:322), the
+ *   NSH netinit chain never runs and CONFIG_NSH_NETINIT /
+ *   CONFIG_NSH_NETINIT_WAPI are dead config, so net_init() has to do what
+ *   apps/netutils/netinit would otherwise have done:
+ *
+ *     netlib_ifup()            -> netinit_net_bringup()   (netinit.c)
+ *     net_wifi_connect()       -> netinit_associate()     (netinit_associate.c)
+ *     netlib_obtain_ipv4addr() -> netinit_net_bringup()   (netinit.c)
+ *
+ *   Association itself goes through the in-tree WEXT path:
+ *   wpa_driver_wext_associate() (apps/wireless/wapi/src/driver_wext.c), the
+ *   very call netinit_associate() makes. It opens its own AF_INET socket, so
+ *   an application only has to fill in struct wpa_wconfig_s.
+ *
+ *   The underlying ioctls (SIOCSIWMODE / SIOCSIWAUTH / SIOCSIWENCODEEXT /
+ *   SIOCSIWESSID) are dispatched by the esp32s3 station driver in
+ *   arch/xtensa/src/common/espressif/esp_wlan.c:wlan_ioctl(); SIOCSIWESSID
+ *   with IW_ESSID_ON is what actually triggers ops->connect().
+ *
  * - Todos are kept in RAM for bring-up (volatile across reboots); the
  *   previous ESP-IDF nvs.h API is not part of the NuttX app-level ABI.
  *
@@ -26,12 +45,21 @@
 #include <unistd.h>
 #include <syslog.h>
 
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+
 #include <net/if.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 
+#include <nuttx/wireless/wireless.h>
+
 #include <netutils/netlib.h>
 #include <netutils/ntpclient.h>
+
+#ifdef CONFIG_WIRELESS_WAPI
+#  include <wireless/wapi.h>
+#endif
 
 #include "net_services.h"
 #include "http_util.h"
@@ -52,7 +80,39 @@
 #define TODO_MAX               8
 #define TODO_ITEM_LEN          64
 
-/* Weather code -> short text (subset of WMO codes). */
+/* Bring-up timing. Every wait in net_init() is bounded; the worst case is
+ * roughly 18 s and it can never block the UI loop forever:
+ *
+ *   net_wifi_connect()       - ioctls only, returns as soon as the driver
+ *                              has accepted the association request (ms).
+ *   netlib_obtain_ipv4addr() - blocking, but internally bounded by
+ *                              CONFIG_NETUTILS_DHCPC_RETRIES *
+ *                              CONFIG_NETUTILS_DHCPC_RECV_TIMEOUT_MS
+ *                              (3 * 3000 ms = 9 s with the board defaults,
+ *                              see netutils/dhcpc/Kconfig).
+ *   the poll loop below      - NET_ADDR_POLL_MS.
+ */
+#define NET_ADDR_POLL_MS       9000
+#define NET_POLL_STEP_MS       250
+
+/* Wi-Fi credentials. Following the config.h secret convention, the values
+ * come from Kconfig only; a missing symbol degrades to the empty string and
+ * the passphrase is never written to the log. */
+#ifndef CONFIG_AIVOX3_WIFI_SSID
+#  define CONFIG_AIVOX3_WIFI_SSID ""
+#endif
+
+#ifndef CONFIG_AIVOX3_WIFI_PASSWORD
+#  define CONFIG_AIVOX3_WIFI_PASSWORD ""
+#endif
+
+/* True when DHCP can be started programmatically. Mirrors the guard that
+ * apps/include/netutils/netlib.h places around netlib_obtain_ipv4addr(). */
+#if defined(CONFIG_NET_IPv4) && defined(CONFIG_NETUTILS_DHCPC)
+#  define NET_HAVE_DHCPC       1
+#else
+#  undef  NET_HAVE_DHCPC
+#endif
 
 /****************************************************************************
  * Private Data
@@ -68,7 +128,7 @@ static const struct
   { 0,   "Clear" },     { 1,   "Mainly clear" }, { 2, "Partly cloudy" },
   { 3,   "Overcast" },  { 45,  "Fog" },          { 48, "Rime fog" },
   { 51,  "Light drizzle" }, { 61, "Light rain" }, { 63, "Rain" },
-  { 65,  "Heavy rain" }, { 71,  "Light snow" },   { 80, "Rain showers" },
+  { 65,  "Heavy rain" }, { 71, "Light snow" },   { 80, "Rain showers" },
   { 95,  "Thunderstorm" },
 };
 
@@ -96,33 +156,381 @@ static const char *weather_code_to_text(int code)
   return "Unknown";
 }
 
+#ifndef CONFIG_WIRELESS_WAPI
+/****************************************************************************
+ * Name: wifi_set_ifname
+ *
+ * Description:
+ *   Copy the station interface name into an iwreq, always NUL terminated.
+ *
+ ****************************************************************************/
+
+static void wifi_set_ifname(FAR struct iwreq *iwr)
+{
+  memset(iwr, 0, sizeof(*iwr));
+  strncpy(iwr->ifr_name, WLAN_IFNAME, IFNAMSIZ - 1);
+  iwr->ifr_name[IFNAMSIZ - 1] = '\0';
+}
+
+/****************************************************************************
+ * Name: wifi_set_auth_param
+ *
+ * Description:
+ *   One SIOCSIWAUTH round trip, matching
+ *   wpa_driver_wext_process_auth_param() in
+ *   apps/wireless/wapi/src/driver_wext.c.
+ *
+ ****************************************************************************/
+
+static int wifi_set_auth_param(int sockfd, int idx, uint32_t value)
+{
+  struct iwreq iwr;
+  int ret;
+
+  wifi_set_ifname(&iwr);
+  iwr.u.param.flags = (uint16_t)(idx & IW_AUTH_INDEX);
+  iwr.u.param.value = (int32_t)value;
+
+  ret = ioctl(sockfd, SIOCSIWAUTH, (unsigned long)&iwr);
+  if (ret < 0)
+    {
+      ret = -errno;
+      if (ret != -EOPNOTSUPP)
+        {
+          syslog(LOG_ERR, "ERROR: SIOCSIWAUTH(%d=0x%08lx) failed: %d\n",
+                 idx, (unsigned long)value, ret);
+        }
+    }
+  else
+    {
+      ret = OK;
+    }
+
+  return ret;
+}
+
+/****************************************************************************
+ * Name: wifi_associate_wext
+ *
+ * Description:
+ *   Fallback used only when the wapi library is not linked in
+ *   (CONFIG_WIRELESS_WAPI off). Issues exactly the ioctl sequence that
+ *   wpa_driver_wext_associate() would:
+ *
+ *     SIOCSIWMODE      <- IW_MODE_INFRA
+ *     SIOCSIWAUTH      <- IW_AUTH_WPA_VERSION      = WPA2
+ *     SIOCSIWAUTH      <- IW_AUTH_CIPHER_PAIRWISE  = CCMP
+ *     SIOCSIWENCODEEXT <- alg = IW_ENCODE_ALG_CCMP, key = passphrase
+ *     SIOCSIWESSID     <- flags = IW_ESSID_ON (esp_wlan.c then connects)
+ *
+ ****************************************************************************/
+
+static int wifi_associate_wext(FAR const char *ssid, FAR const char *pass)
+{
+  struct iw_encode_ext *ext;
+  struct iwreq iwr;
+  size_t ssidlen;
+  size_t passlen;
+  int sockfd;
+  int ret = OK;
+
+  sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+  if (sockfd < 0)
+    {
+      ret = -errno;
+      syslog(LOG_ERR, "ERROR: wifi socket failed: %d\n", ret);
+      return ret;
+    }
+
+  /* 1. Infrastructure (station) mode. */
+
+  wifi_set_ifname(&iwr);
+  iwr.u.mode = IW_MODE_INFRA;
+  if (ioctl(sockfd, SIOCSIWMODE, (unsigned long)&iwr) < 0)
+    {
+      ret = -errno;
+      syslog(LOG_ERR, "ERROR: SIOCSIWMODE failed: %d\n", ret);
+      goto out_close;
+    }
+
+  /* 2/3. WPA2-PSK with AES-CCMP. */
+
+  ret = wifi_set_auth_param(sockfd, IW_AUTH_WPA_VERSION,
+                            IW_AUTH_WPA_VERSION_WPA2);
+  if (ret < 0)
+    {
+      goto out_close;
+    }
+
+  ret = wifi_set_auth_param(sockfd, IW_AUTH_CIPHER_PAIRWISE,
+                            IW_AUTH_CIPHER_CCMP);
+  if (ret < 0)
+    {
+      goto out_close;
+    }
+
+  /* 4. The passphrase (WPA2-PSK PMK is derived from it by the driver). */
+
+  passlen = (pass != NULL) ? strlen(pass) : 0;
+  if (passlen > 0)
+    {
+      ext = (FAR struct iw_encode_ext *)malloc(sizeof(*ext) + passlen);
+      if (ext == NULL)
+        {
+          ret = -ENOMEM;
+          goto out_close;
+        }
+
+      wifi_set_ifname(&iwr);
+      memset(ext, 0, sizeof(*ext));
+      ext->alg     = IW_ENCODE_ALG_CCMP;
+      ext->key_len = (uint16_t)passlen;
+      memcpy(ext + 1, pass, passlen);
+
+      iwr.u.encoding.pointer = ext;
+      iwr.u.encoding.length  = (uint16_t)(sizeof(*ext) + passlen);
+
+      if (ioctl(sockfd, SIOCSIWENCODEEXT, (unsigned long)&iwr) < 0)
+        {
+          ret = -errno;
+          syslog(LOG_ERR, "ERROR: SIOCSIWENCODEEXT failed: %d\n", ret);
+          free(ext);
+          goto out_close;
+        }
+
+      free(ext);
+    }
+
+  /* 5. SSID with IW_ESSID_ON; esp_wlan.c then calls ops->connect(). */
+
+  ssidlen = strlen(ssid);
+  wifi_set_ifname(&iwr);
+  iwr.u.essid.pointer = (FAR void *)ssid;
+  iwr.u.essid.length  = (uint16_t)ssidlen;
+  iwr.u.essid.flags   = IW_ESSID_ON;
+
+  if (ioctl(sockfd, SIOCSIWESSID, (unsigned long)&iwr) < 0)
+    {
+      ret = -errno;
+      syslog(LOG_ERR, "ERROR: SIOCSIWESSID failed: %d\n", ret);
+      goto out_close;
+    }
+
+  ret = OK;
+
+out_close:
+  close(sockfd);
+  return ret;
+}
+#endif /* !CONFIG_WIRELESS_WAPI */
+
+/****************************************************************************
+ * Name: wifi_associate
+ *
+ * Description:
+ *   Program wlan0 for WPA2-PSK (AES-CCMP) and kick off association.
+ *
+ * Input Parameters:
+ *   ssid - NUL-terminated SSID, non-empty.
+ *   pass - NUL-terminated WPA2 passphrase, may be empty (open network).
+ *
+ * Returned Value:
+ *   OK on success; a negated errno on failure.
+ *
+ ****************************************************************************/
+
+static int wifi_associate(FAR const char *ssid, FAR const char *pass)
+{
+#ifdef CONFIG_WIRELESS_WAPI
+  struct wpa_wconfig_s conf;
+  size_t ssidlen = strlen(ssid);
+  size_t passlen = (pass != NULL) ? strlen(pass) : 0;
+
+  memset(&conf, 0, sizeof(conf));
+
+  conf.ifname      = WLAN_IFNAME;
+  conf.sta_mode    = WAPI_MODE_MANAGED;         /* == IW_MODE_INFRA      */
+  conf.auth_wpa    = IW_AUTH_WPA_VERSION_WPA2;  /* 0x04                  */
+  conf.cipher_mode = IW_AUTH_CIPHER_CCMP;       /* 0x08                  */
+  conf.alg         = WPA_ALG_CCMP;
+  conf.freq        = 0.0;                       /* let the driver scan   */
+  conf.flag        = WAPI_FREQ_AUTO;
+  conf.ssidlen     = (uint8_t)ssidlen;
+  conf.phraselen   = (uint8_t)passlen;
+  conf.ssid        = ssid;
+  conf.bssid       = NULL;
+  conf.passphrase  = (passlen > 0) ? pass : NULL;
+
+  return wpa_driver_wext_associate(&conf);
+#else
+  return wifi_associate_wext(ssid, pass);
+#endif
+}
+
+/****************************************************************************
+ * Name: net_log_ipv4
+ *
+ * Description:
+ *   Log the address we ended up with. Never called with a secret.
+ *
+ ****************************************************************************/
+
+static void net_log_ipv4(void)
+{
+  struct in_addr addr;
+  char buf[INET_ADDRSTRLEN];
+
+  if (netlib_get_ipv4addr(WLAN_IFNAME, &addr) == OK &&
+      inet_ntop(AF_INET, &addr, buf, sizeof(buf)) != NULL)
+    {
+      syslog(LOG_INFO, "net: %s IPv4 %s\n", WLAN_IFNAME, buf);
+    }
+}
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
 
 /****************************************************************************
  * Name: net_init
+ *
+ * Description:
+ *   Bring the station up in-process: ifup, associate, DHCP, then wait for
+ *   a usable IPv4 address. This replaces the NSH netinit step that this
+ *   board never reaches because CONFIG_INIT_ENTRYPOINT is
+ *   desktop_companion_main.
+ *
+ *   Bounded: returns a negated errno instead of blocking. main.c ignores the
+ *   return value, so every failure path is also written to syslog.
+ *
+ * Returned Value:
+ *   OK when net_is_connected() is true; a negated errno otherwise.
+ *
  ****************************************************************************/
 
 int net_init(void)
 {
-  return OK;
+  int ret;
+  int waited;
+
+  if (net_is_connected())
+    {
+      syslog(LOG_INFO, "net_init: %s already has an IPv4 address\n",
+             WLAN_IFNAME);
+      net_log_ipv4();
+      return OK;
+    }
+
+  /* 1. Interface up. Equivalent to netinit_net_bringup() in netinit.c. */
+
+  ret = netlib_ifup(WLAN_IFNAME);
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: net_init: ifup %s failed: %d\n",
+             WLAN_IFNAME, ret);
+      return ret;
+    }
+
+  /* 2. Associate. Equivalent to netinit_associate() in
+   *    netinit_associate.c. NULL/NULL means "use the Kconfig credentials". */
+
+  ret = net_wifi_connect(NULL, NULL);
+  if (ret < 0)
+    {
+      /* net_wifi_connect() has already logged the reason. */
+      return ret;
+    }
+
+  /* 3. DHCP. netlib_obtain_ipv4addr() is blocking but self-bounded by the
+   *    DHCPC retry/timeout config, so it cannot wedge the caller.
+   */
+
+#ifdef NET_HAVE_DHCPC
+  ret = netlib_obtain_ipv4addr(WLAN_IFNAME);
+  if (ret < 0)
+    {
+      syslog(LOG_WARNING, "WARNING: net_init: DHCP on %s failed: %d\n",
+             WLAN_IFNAME, ret);
+    }
+#endif
+
+  /* 4. Wait for the address to become visible on the interface. */
+
+  for (waited = 0; waited < NET_ADDR_POLL_MS; waited += NET_POLL_STEP_MS)
+    {
+      if (net_is_connected())
+        {
+          net_log_ipv4();
+          return OK;
+        }
+
+      usleep(NET_POLL_STEP_MS * 1000);
+    }
+
+  syslog(LOG_ERR,
+         "ERROR: net_init: no IPv4 on %s after association "
+         "(ssid=%s, %d ms). Check CONFIG_NETDEV_WIRELESS_IOCTL, "
+         "CONFIG_WIRELESS_WAPI and the AP credentials.\n",
+         WLAN_IFNAME, CONFIG_AIVOX3_WIFI_SSID, NET_ADDR_POLL_MS);
+
+  return -ETIMEDOUT;
 }
 
 /****************************************************************************
  * Name: net_wifi_connect
+ *
+ * Description:
+ *   Associate wlan0 with a WPA2-PSK access point. Empty/NULL arguments fall
+ *   back to the Kconfig strings CONFIG_AIVOX3_WIFI_SSID and
+ *   CONFIG_AIVOX3_WIFI_PASSWORD.
+ *
+ *   The SSID is logged, the passphrase NEVER is (same convention as
+ *   CONFIG_AIVOX3_LLM_API_KEY in config.h).
+ *
+ * Returned Value:
+ *   OK on success; a negated errno on failure.
+ *
  ****************************************************************************/
 
-int net_wifi_connect(const char *ssid, const char *pass)
+int net_wifi_connect(FAR const char *ssid, FAR const char *pass)
 {
-  /* TODO(real-device): esp32s3 STA association. The generic wapi API only
-   * exposes wapi_set_essid()/wapi_set_freq(); the WPA passkey path goes
-   * through the platform wext extension (SIOCSIWESSID with the extra
-   * payload) or wpa_driver_wext_associate(). Wire this up on the board,
-   * or rely on CONFIG_ESP32S3_WIFI_SAVE_PARAM auto-join for now. */
-  syslog(LOG_WARNING, "net_wifi_connect: not wired yet (ssid=%s)\n",
-         ssid != NULL ? ssid : "?");
-  return -ENOSYS;
+  FAR const char *use_ssid = ssid;
+  FAR const char *use_pass = pass;
+  int ret;
+
+  if (use_ssid == NULL || *use_ssid == '\0')
+    {
+      use_ssid = CONFIG_AIVOX3_WIFI_SSID;
+    }
+
+  if (use_pass == NULL || *use_pass == '\0')
+    {
+      use_pass = CONFIG_AIVOX3_WIFI_PASSWORD;
+    }
+
+  if (*use_ssid == '\0')
+    {
+      syslog(LOG_ERR,
+             "ERROR: net_wifi_connect: no SSID configured. Set "
+             "CONFIG_AIVOX3_WIFI_SSID (menuconfig) or pass one in.\n");
+      return -EINVAL;
+    }
+
+  /* Log the SSID and only the *fact* that a passphrase is present. */
+  syslog(LOG_INFO, "net_wifi_connect: ssid=%s, passphrase=%s\n",
+         use_ssid, (*use_pass != '\0') ? "set (not logged)" : "none");
+
+  ret = wifi_associate(use_ssid, use_pass);
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: net_wifi_connect: association to '%s' "
+             "failed: %d\n", use_ssid, ret);
+      return ret;
+    }
+
+  syslog(LOG_INFO, "net_wifi_connect: association request to '%s' "
+         "accepted\n", use_ssid);
+  return OK;
 }
 
 /****************************************************************************

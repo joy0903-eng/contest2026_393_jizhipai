@@ -77,23 +77,27 @@ int audio_capture_read_timeout(void *buf, size_t len, int timeout_ms);
  * The capture ring buffer is completely independent of this path: dropping
  * or delaying a word never stalls or blocks microphone capture.
  *
- * INVARIANT - DO NOT BREAK
- * ------------------------
- * dsp_vad / dsp_mfcc / kws_engine keep their working areas in module-static
- * arrays, so they are not reentrant:
+ * CONCURRENCY CONTRACT
+ * --------------------
+ * The DSP modules are not reentrant.  The authoritative statement of the
+ * constraints is INV-1 .. INV-5 in dsp_vad.h - read that.  They are
+ * deliberately NOT repeated here: a second copy is the one nobody updates.
  *
- *   - dsp_vad_feed() may only run on the capture thread (this module),
- *   - dsp_vad_trim() / dsp_mfcc_compute() / kws_*() may only run on one
- *     consumer at a time,
- *   - dsp_vad_feed() must NOT run concurrently with the above: feed() itself
- *     reaches dsp_vad_trim() through
- *     feed -> vad_process_frame -> vad_finish_capture -> dsp_vad_trim,
- *     which uses the same static workspace.
+ * What THIS module guarantees on its side of that contract:
  *
- * The last point is what "while an utterance is pending, stop feeding"
- * actually buys us.  It is a load-bearing invariant: removing it would not
- * crash, it would produce occasional silent mis-recognition, which is much
- * worse to debug.  Keep the gate.
+ *   INV-1/INV-2  dsp_vad_feed() runs only on the capture thread and is
+ *                suspended while an utterance is pending (the g_word_pending
+ *                gate in audio_pipeline.c).  That gate is load-bearing:
+ *                without it feed() and the consumer share a module-static
+ *                workspace, which does not crash - it produces occasional
+ *                silent mis-recognition.  Do not optimise it away.
+ *   INV-3        utterances arrive already trimmed; do not trim again.
+ *   INV-4        consumers are refused once shutdown starts (g_dsp_on is
+ *                checked under the lock), and audio_deinit() waits -
+ *                bounded - for an in-flight callback before dsp_vad_deinit()
+ *                frees the buffer.
+ *   INV-5        around playback this module calls dsp_vad_reset() only,
+ *                never dsp_vad_deinit(), so the learned noise floor survives.
  * ------------------------------------------------------------------------- */
 
 /* 1 while an utterance is being captured RIGHT NOW, 0 otherwise.
@@ -114,11 +118,8 @@ int audio_capture_is_speech(void);
  * samples).  This costs no extra memory: the alternative
  * (audio_capture_take_word) needs a second 87 KB buffer in the caller.
  *
- * The utterance is ALREADY silence-trimmed: vad_finish_capture() calls
- * dsp_vad_trim() before publishing it (dsp_vad.c:178-182).  Do NOT trim it
- * again - a second pass with the same 18% threshold eats the ~60 ms margin
- * that the first pass deliberately keeps, shortening the first syllables and
- * pushing the DTW distance up.
+ * The utterance is ALREADY silence-trimmed (INV-3 in dsp_vad.h) - do NOT
+ * trim it again.
  *
  * `fn` runs without the internal lock held, so it may take a few tens of ms
  * (kws_recognize) without blocking microphone capture.  It MUST NOT block
@@ -138,7 +139,7 @@ int audio_capture_process_word(audio_word_fn_t fn, void *arg);
 /* Copy-out variant of the above.  `out` must hold at least
  * VAD_MAX_WORD_SAMPLES (44800) samples, i.e. ~87 KB.  Prefer
  * audio_capture_process_word() unless you really need to keep the PCM.
- * The utterance is already trimmed (see above) - do not trim again.
+ * The utterance is already trimmed (INV-3) - do not trim again.
  *
  * Returns the number of samples copied, 0 when nothing is pending, or a
  * negated errno (-EAGAIN when the VAD is not running, -ENOSPC when the

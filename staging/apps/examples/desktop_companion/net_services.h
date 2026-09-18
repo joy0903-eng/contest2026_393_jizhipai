@@ -30,12 +30,19 @@ extern "C"
  * Public Function Prototypes
  ****************************************************************************/
 
-/* Initialize networking subsystem (no-op placeholder; real link comes from
- * net_wifi_connect / NSH netinit). Returns OK. */
+/* Bring up the station in-process: ifup wlan0, associate (WPA2-PSK), run
+ * DHCP and wait for an IPv4 address. Every wait is bounded (~18 s worst
+ * case) and main.c ignores the return value, so failures are also logged
+ * with syslog(). Returns OK when net_is_connected() is true, otherwise a
+ * negated errno (-ETIMEDOUT when the address never appeared). */
 int net_init(void);
 
-/* Connect to a Wi-Fi AP. ssid/pass may be NULL to use saved params.
- * Returns OK on success, negated errno otherwise. */
+/* Associate with a WPA2-PSK AP. NULL/empty ssid or pass fall back to the
+ * Kconfig strings CONFIG_AIVOX3_WIFI_SSID / CONFIG_AIVOX3_WIFI_PASSWORD.
+ * The SSID is logged, the passphrase is never logged.
+ * Returns OK once the driver has accepted the request, negated errno
+ * otherwise. Note that this only starts association; the link is up when
+ * net_is_connected() reports true. */
 int net_wifi_connect(const char *ssid, const char *pass);
 
 /* Poll until the wlan0 interface has an IPv4 address, or timeout (ms).
