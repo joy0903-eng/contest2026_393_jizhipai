@@ -1,35 +1,39 @@
-Wrap bootloader_init() sub-stages with IRAM [HB] probes + ROM stack switch (v5)
+Wrap bootloader_init() sub-stages + SOURCE-LEVEL exception capture hooks (v9)
 
 arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c (new, rewritten)
 arch/xtensa/src/esp32s3/hal.mk
 arch/xtensa/src/esp32s3/esp32s3_start.c
+arch/xtensa/src/common/xtensa_vectors.S
 
-WHY v5 (root cause found)
--------------------------
-Runs 76/78/79/80 all died at the same stack depth: __start + wrap0 +
-hb_mark need ~106 bytes below the ROM-provided stack pointer (>0 printed
-OK), and the very first deeper frame (real bootloader_init, ~S-128)
-faulted.  The SIMPLE_BOOT path in esp32s3_start.c never installs a real
-stack, and the ROM-provided one has only ~100 usable bytes.  The fault
-kicks off an exception storm (Saved PC observed inside
-_double_exception_vector and _xtensa_context_save) that the TG0WDT
-finally kills.
+WHY v9 (runs 83/84/85: runtime IRAM rewrites do not work here)
+--------------------------------------------------------------
+v6 hooked the user-exception slot and v7 hooked ALL 15 vector slots at
+runtime; neither ever captured anything (35 boots each), while the storm
+kept running the ORIGINAL handlers (Saved PC inside _xtensa_context_save)
+-- the slot stores never took effect.  v8 additionally hooked
+_xtensa_panic: the boot then died inside the arm probe itself (audit
+never written, the >0 marker gone), i.e. that store faults outright
+while the slot stores are silently dropped.  Conclusion: no runtime
+writes to the vector region at all.
 
-v5 changes:
-- esp32s3_start.c: switch a1 to g_idlestack (the IDLE task stack lives
-  in .noinit) right after wsr.vecbase, before bootloader_init().  This
-  is transparent to the generated code (locals are a1-relative; the
-  function never returns to the old frame).
-- boot-stage heartbeat probes kept (v2 mechanics): section-.iram1
-  wrappers + -mtext-section-literals, no sections.ld edit (run#77
-  lesson: CI tree sections.ld drifts, hunk placement unreliable).
+v9 changes:
+- xtensa_vectors.S: the level2/level3/nmi/kernel/user vectors now call
+  hb_exc_stub_180/1c0/2c0/300/340 and the double-exception vector body
+  is collapsed into a call0 hb_exc_stub_3c0 -- link-time symbol
+  resolution, zero runtime writes.  Window vectors untouched.
+- esp32s3_boot_hb_wrap.c: hb_arm_exc_probe no longer writes anywhere;
+  it only reads back the live vecbase for the [HB] ARM health line.
+  hb_dump_prev re-arms hb_exc_area[0] after dumping (the bss-clearing
+  bootloader stage never runs in this debug configuration, so the asm
+  guard would otherwise see cold-boot garbage and skip every capture).
+- Boot-stage heartbeat probes and the v5 ROM-stack switch kept.
 
 Debug-only change; probes to be reverted once boot is verified.
 
 diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
 --- /dev/null
 +++ b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
-@@ -0,0 +1,573 @@
+@@ -0,0 +1,512 @@
 +/****************************************************************************
 + * arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
 + *
@@ -263,21 +267,21 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +  hb_mark('H', '<');
 +}
 +
-+/* ---- v7: ALL-vector-slot capture (run83 lesson) ----------------------
-+ * v6 hooked ONLY the user-exception slot (+0x340); run83 proved it never
-+ * fires (35 boots, hb_exc_area stayed zero) -- so the primary exception
-+ * goes through a WINDOW vector (+0x000..0x140), a level>=2 slot
-+ * (+0x180..0x240), or the live vecbase is not our table at all.  v7
-+ * rewrites ALL 15 vector slots to jump into per-slot stubs
-+ * (movi a6,<id>; j common).  The common body stores an 8-word record
-+ * into .bss hb_exc_area: slot-id, EXCCAUSE, EXCVADDR, EPC1, EXCSAVE1,
-+ * PS, DEPC and -- decisive -- the VECBASE seen at exception time.  It
-+ * then spins (no context save -> no storm); TG0WDT resets ~8 s later;
-+ * DRAM survives the soft reset, so the next boot dumps the record
-+ * before re-arming.  A guard (slot-id already nonzero -> just spin)
-+ * keeps a nested double-strike from overwriting the primary capture.
-+ * dump_prev prints an EXC-none line when the record is clean, proving
-+ * the arm path ran.  Debug-only; reverted with the rest of 0004. */
++/* ---- v9: SOURCE-LEVEL vector hook (runs 83/84/85 lesson) --------------
++ * Runtime IRAM rewrites are dead here: v6 (user slot only) and v7 (all
++ * 15 slots) never captured anything (35 boots each), yet the storm still
++ * runs the ORIGINAL handlers (Saved PC inside _xtensa_context_save) --
++ * so the slot stores never took effect.  v8 additionally hooked
++ * _xtensa_panic at runtime: the boot then died inside the arm probe
++ * itself (audit never written, >0 gone) -- THAT store faults outright
++ * while the slot stores are silently dropped.  Conclusion: no runtime
++ * writes to the vector region, ever.  v9 moves the hook to link time:
++ * this patch also rewrites arch/xtensa/src/common/xtensa_vectors.S so
++ * the level2/level3/nmi/kernel/user vectors call hb_exc_stub_180/1c0/
++ * 2c0/300/340 and the double-exception vector calls hb_exc_stub_3c0
++ * directly.  The capture stubs below are unchanged; the window vectors
++ * are left untouched (they are the hot path of normal windowed-ABI
++ * execution).  Debug-only; reverted with the rest of 0004. */
 +
 +/* Capture record: [0]=slot id (1..15), [1]=EXCCAUSE, [2]=EXCVADDR,
 + * [3]=EPC1, [4]=EXCSAVE1, [5]=PS, [6]=DEPC, [7]=vecbase at exception.
@@ -287,11 +291,9 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +uint32_t hb_exc_area[12];
 +
 +/* Arm-time audit, written every boot by hb_arm_exc_probe and dumped
-+ * before the capture record: [0]=live vecbase, [1]=double-slot word
-+ * AFTER the rewrite, [2]=user-slot word AFTER the rewrite, [3]=first
-+ * word of _xtensa_panic AFTER the hook.  Run83/84 lesson: the slots
-+ * never fired -- this line proves (a) which table the CPU is on and
-+ * (b) whether our IRAM writes actually stick (PMS write-protect?). */
++ * before the capture record: [0]=live vecbase (proves the CPU is on
++ * the app vector table and that the dump/arm path ran); [1..3] were
++ * used by the v8 write-back experiment and stay zero in v9. */
 +
 +uint32_t hb_arm_audit[4];
 +
@@ -325,6 +327,7 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +{
 +  char buf[136];
 +  char *p = buf;
++  uint32_t id = hb_exc_area[0];
 +  int i;
 +
 +  /* audit line: always printed, proves the arm path ran every boot */
@@ -339,26 +342,35 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +  *p = '\0';
 +  ets_printf(buf);
 +
-+  if (hb_exc_area[0] == 0)
++  /* Print the capture record only when the commit marker is a real slot
++   * id (1..16); cold-boot .bss garbage would otherwise print as an EXC
++   * line.  The bss-clearing bootloader stage never runs in this debug
++   * configuration, so after the dump the record is re-armed to zero:
++   * the asm guard (bnez on the marker) then lets exactly one capture
++   * happen per boot. */
++  if (id >= 1 && id <= 16)
++    {
++      p = buf;
++      hb_put_tag(&p, 'E', 'X', 'C', ' ', ' ', ' ', ' ', ' ');
++      for (i = 0; i < 12; i++)
++        {
++          hb_fmt_hex(p, hb_exc_area[i]);
++          p += 8;
++          *p++ = (i == 11) ? '\n' : ' ';
++        }
++      *p = '\0';
++      ets_printf(buf);
++    }
++  else
 +    {
 +      p = buf;
 +      hb_put_tag(&p, 'E', 'X', 'C', ' ', 'n', 'o', 'n', 'e');
 +      *p++ = '\n';
 +      *p = '\0';
 +      ets_printf(buf);
-+      return;
 +    }
 +
-+  p = buf;
-+  hb_put_tag(&p, 'E', 'X', 'C', ' ', ' ', ' ', ' ', ' ');
-+  for (i = 0; i < 12; i++)
-+    {
-+      hb_fmt_hex(p, hb_exc_area[i]);
-+      p += 8;
-+      *p++ = (i == 11) ? '\n' : ' ';
-+    }
-+  *p = '\0';
-+  ets_printf(buf);
++  hb_exc_area[0] = 0;
 +}
 +
 +/* No naked attribute on Xtensa GCC -> file-level asm so the emitted code
@@ -520,88 +532,19 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +  ".popsection\n"
 +);
 +
-+/* Rewrite ALL 15 vector slots to `j <stub>`.  Slot layout measured on
-+ * the run82 ELF: 6 window vectors (+0x000/040/080/0c0/100/140), levels
-+ * 2-5 (+0x180/1c0/200/240), debug (+0x280), NMI (+0x2c0), kernel
-+ * (+0x300), user (+0x340), double (+0x3c0).  IRAM is writable, isync
-+ * flushes the prefetch queue.  Stub labels are .balign 4 so the J
-+ * offsets stay 4-byte multiples. */
++/* v9: the runtime rewrite loop is GONE (runs 83/84/85: the slot stores
++ * are silently dropped, and v8's panic-hook store faults outright).
++ * The vectors are hooked at link time by the xtensa_vectors.S hunk of
++ * this patch.  This probe now only reads back the live vecbase as a
++ * per-boot health check for the ARM line: nonzero = the dump/arm path
++ * ran on the app vector table. */
 +
 +HB_IRAM void hb_arm_exc_probe(void)
 +{
-+  extern uint8_t _init_start[];
-+  extern void hb_exc_stub_000(void);
-+  extern void hb_exc_stub_040(void);
-+  extern void hb_exc_stub_080(void);
-+  extern void hb_exc_stub_0c0(void);
-+  extern void hb_exc_stub_100(void);
-+  extern void hb_exc_stub_140(void);
-+  extern void hb_exc_stub_180(void);
-+  extern void hb_exc_stub_1c0(void);
-+  extern void hb_exc_stub_200(void);
-+  extern void hb_exc_stub_240(void);
-+  extern void hb_exc_stub_280(void);
-+  extern void hb_exc_stub_2c0(void);
-+  extern void hb_exc_stub_300(void);
-+  extern void hb_exc_stub_340(void);
-+  extern void hb_exc_stub_3c0(void);
-+  static void * const hb_exc_stubs[15] =
-+    {
-+      hb_exc_stub_000, hb_exc_stub_040, hb_exc_stub_080,
-+      hb_exc_stub_0c0, hb_exc_stub_100, hb_exc_stub_140,
-+      hb_exc_stub_180, hb_exc_stub_1c0, hb_exc_stub_200,
-+      hb_exc_stub_240, hb_exc_stub_280, hb_exc_stub_2c0,
-+      hb_exc_stub_300, hb_exc_stub_340, hb_exc_stub_3c0
-+    };
-+  static const uint16_t hb_exc_offs[15] =
-+    {
-+      0x000u, 0x040u, 0x080u, 0x0c0u, 0x100u, 0x140u, 0x180u, 0x1c0u,
-+      0x200u, 0x240u, 0x280u, 0x2c0u, 0x300u, 0x340u, 0x3c0u
-+    };
-+  extern void hb_exc_stub_panic(void);
-+  extern void _xtensa_panic(void);
-+  volatile uint32_t *slot;
-+  volatile uint32_t *panicw;
-+  uint32_t pc;
-+  int32_t off;
-+  uint32_t instr;
-+  int i;
++  uint32_t vb;
 +
-+  for (i = 0; i < 15; i++)
-+    {
-+      slot = (volatile uint32_t *)
-+        ((uint32_t)_init_start + hb_exc_offs[i]);
-+      pc = (uint32_t)slot;
-+      off = (int32_t)((uint8_t *)hb_exc_stubs[i]
-+                      - (uint8_t *)pc - 4);
-+      instr = (((uint32_t)off >> 2) & 0x3ffffu) << 6 | 0x06u;
-+
-+      *slot = instr;
-+    }
-+
-+  /* v8: also hook the panic funnel.  Every storm path ends in
-+   * _xtensa_panic (the double vector calls it with cause=2 in a2, the
-+   * level-1 handlers call it too).  Overwrite its first word with a j
-+   * to the panic stub (id 16); the common body then records a0 = the
-+   * call site inside the handler, a1 = stack, a2 = cause. */
-+
-+  panicw = (volatile uint32_t *)(void *)_xtensa_panic;
-+  pc = (uint32_t)panicw;
-+  off = (int32_t)((uint8_t *)hb_exc_stub_panic - (uint8_t *)pc - 4);
-+  instr = (((uint32_t)off >> 2) & 0x3ffffu) << 6 | 0x06u;
-+  *panicw = instr;
-+
-+  __asm__ __volatile__ ("isync\n" ::: "memory");
-+
-+  /* v8 audit: which table is live and did our writes actually stick? */
-+
-+  __asm__ __volatile__ ("rsr.vecbase %0\n" : "=r" (pc));
-+  hb_arm_audit[0] = pc;
-+  hb_arm_audit[1] = ((volatile uint32_t *)
-+                     ((uint32_t)_init_start + 0x3c0))[0];
-+  hb_arm_audit[2] = ((volatile uint32_t *)
-+                     ((uint32_t)_init_start + 0x340))[0];
-+  hb_arm_audit[3] = panicw[0];
++  __asm__ __volatile__ ("rsr.vecbase %0\n" : "=r" (vb));
++  hb_arm_audit[0] = vb;
 +}
 diff --git a/arch/xtensa/src/esp32s3/hal.mk b/arch/xtensa/src/esp32s3/hal.mk
 --- a/arch/xtensa/src/esp32s3/hal.mk
@@ -677,3 +620,86 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_start.c b/arch/xtensa/src/esp32s3/e
    if (bootloader_init() != 0)
      {
        ets_printf("Hardware init failed, aborting\n");
+diff --git a/arch/xtensa/src/common/xtensa_vectors.S b/arch/xtensa/src/common/xtensa_vectors.S
+--- a/arch/xtensa/src/common/xtensa_vectors.S
++++ b/arch/xtensa/src/common/xtensa_vectors.S
+@@ -72,7 +72,7 @@
+ 
+ _xtensa_level2_vector:
+ 	wsr			a0, EXCSAVE_2			/* Preserve a0 */
+-	call0		_xtensa_level2_handler	/* Call level 2 interrupt handling */
++	call0	hb_exc_stub_180	/* Call level 2 interrupt handling */
+ 
+ 	/* Never returns here - call0 is used as a jump */
+ 
+@@ -91,7 +91,7 @@
+ 
+ _xtensa_level3_vector:
+ 	wsr			a0, EXCSAVE_3			/* Preserve a0 */
+-	call0		_xtensa_level3_handler	/* Call level 3 interrupt handling */
++	call0	hb_exc_stub_1c0	/* Call level 3 interrupt handling */
+ 
+ 	/* Never returns here - call0 is used as a jump */
+ 
+@@ -189,7 +189,7 @@
+ 
+ _xtensa_nmi_vector:
+ 	wsr 	a0, EXCSAVE + XCHAL_NMILEVEL	/* Preserve a0 */
+-	call0	_xtensa_nmi_handler
++	call0	hb_exc_stub_2c0
+ 
+ 	.size	_xtensa_nmi_vector, . - _xtensa_nmi_vector
+ 	.end	literal_prefix
+@@ -237,32 +237,7 @@
+ 	.align		4
+ 
+ _double_exception_vector:
+-	/* Can't use exception_entry because there is no relationship between EPC1
+-	 * DEPC and the current level.  This can be handled by a separate ifeq
+-	 * block in the macro, however this part is not used, so let's not add
+-	 * this special case until we have an application for it.
+-	 */
+-
+-	wsr		a0, EXCSAVE_1		/* Preserve a0 */
+-
+-	mov		a0, sp							/* sp == a1 */
+-	addi	sp, sp, -XCPTCONTEXT_SIZE	/* Allocate interrupt stack frame */
+-	s32i	a0, sp, (4 * REG_A1)			/* Save pre-interrupt SP */
+-	rsr		a0, PS							/* Save interruptee's PS -- REVISIT */
+-	s32i	a0, sp, (4 * REG_PS)
+-	rsr		a0, DEPC						/* Save interruptee's PC */
+-	s32i	a0, sp, (4 * REG_PC)
+-	rsr		a0, EXCSAVE_1				/* Save interruptee's a0 -- REVISIT */
+-	s32i	a0, sp, (4 * REG_A0)
+-
+-	rsr		a0, EXCCAUSE					/* Save the EXCCAUSE register */
+-	s32i	a0, sp, (4 * REG_EXCCAUSE)
+-	rsr		a0, EXCVADDR					/* Save the EXCVADDR register */
+-	s32i	a0, sp, (4 * REG_EXCVADDR)
+-
+-	s32i	a2, sp, (4 * REG_A2)
+-	movi	a2, XTENSA_DOUBLE_EXCEPTION		/* Argument 1: Error code */
+-	call0	_xtensa_panic					/* Does not return */
++	call0	hb_exc_stub_3c0	/* v9: capture EXCCAUSE/DEPC, spin; no emergency-stack stores (sp may be garbage) */
+ 
+ 	.end	literal_prefix
+ 
+@@ -285,7 +260,7 @@
+ 
+ _kernel_exception_vector:
+ 	wsr		a0, EXCSAVE_1					/* Preserve a0 */
+-	call0	_xtensa_kernel_handler
++	call0	hb_exc_stub_300
+ 
+ 	.size	_kernel_exception_vector, . - _kernel_exception_vector
+ 	.end	literal_prefix
+@@ -307,6 +282,6 @@
+ _user_exception_vector:
+ 
+ 	wsr		a0, EXCSAVE_1					/* Preserve a0 */
+-	call0	_xtensa_user_handler	/* And jump to user exception handler */
+-
+-	.end	literal_prefix
++	call0	hb_exc_stub_340	/* And jump to user exception handler */
++
++	.end	literal_prefix
