@@ -457,6 +457,353 @@ jobs:
             which esptool.py || true
           } >> build.log 2>&1 || { echo "== ESPTOOL PREP FAILED ==" >> build.log; exit 1; }
           echo "ESPTOOL OK" >> build.log
+          # ------------------------------------------------------------------
+          # ZERO-LOAD-ADDRESS GATE, part 1/3: materialise the checker.
+          #
+          # 2026-09-17, decided by REAL HARDWARE, not by reasoning.
+          #
+          # The board flashed with the run#68/#69 image (787632 bytes, md5
+          # 71e92552cc0fe0f73a3147a6cca5a8ae) prints:
+          #     load:0x00000000,len:0x1528
+          #     Guru Meditation Error: Core 0 panic'ed (StoreProhibited)
+          #     EXCVADDR: 0x00000000
+          #     A12     : 0x00001528        <-- == that segment's length
+          #     Backtrace: 0x40045abc ...   <-- all in ROM
+          # and then reboots forever (TG0WDT_SYS_RST).
+          #
+          # That falsifies what this repo used to believe.  We treated a
+          # segment with load address 0 as harmless esptool flash-alignment
+          # padding that "the ROM skips", citing
+          #   nuttx/arch/xtensa/src/common/espressif/esp_loader.c:65
+          #   #define IS_PADD(addr) (addr == 0)
+          # That symbol is NuttX's OWN secondary loader.  This board is built
+          # with CONFIG_ESPRESSIF_SIMPLE_BOOT=y, so there IS no second-stage
+          # bootloader: ESP-ROM:esp32s3-20210327 parses nuttx.bin itself, and
+          # it does not skip anything -- it copies data_len bytes to address 0
+          # and takes a StoreProhibited store fault.  (ESP-IDF gets away with
+          # these segments only because its own 2nd-stage bootloader, which
+          # does skip them, is what parses the app image.)
+          #
+          # esptool itself just labels such a segment [PADDING] because its
+          # per-chip table maps 0x00000000-0x00010000 to "PADDING".  That is
+          # esptool's CLASSIFICATION, not a promise from the ROM.
+          #
+          # Origin of the segments (proved, not guessed): esptool elf2image
+          # emits them as MMU-page (64 KB) alignment padding:
+          #   esptool/bin_image.py save(), the "not self.ram_only_header"
+          #   branch:  pad_segment = ImageSegment(0, b"\x00" * pad_len, ...)
+          # with pad_len from get_alignment_data_needed().  For run#68/#69
+          # that formula reproduces the observed length exactly:
+          #   (0x10000 - 0xeac8) + (0x3c010000 % 0x10000 - 8) - 8 == 0x1528.
+          # Not merge_bin (this workflow no longer has one) and not the
+          # linker (the payload is literal 0x00 filler synthesised by esptool;
+          # no ELF section has LMA 0).
+          #
+          # The checker below parses the ESP image header directly instead of
+          # regex-scraping esptool's human-readable output.  Generated here
+          # once and consumed by BOTH later gates (part 2 = verdict, part 3 =
+          # Collect); /tmp is stable for the whole job.
+          # ------------------------------------------------------------------
+          cat > /tmp/segcheck.py <<'SEGCHECK_PY'
+          #!/usr/bin/env python3
+          # -*- coding: utf-8 -*-
+          """ESP32-S3 firmware image segment checker (zero load-address gate).
+
+          Parses the ESP image header DIRECTLY instead of regex-scraping esptool's
+          human-readable output, and fails if any segment has load address 0.
+
+          ESP image layout (ESP32-S3):
+              offset 0x00   1 byte   magic                    (0xE9)
+              offset 0x01   1 byte   segment count
+              offset 0x02   1 byte   flash mode
+              offset 0x03   1 byte   flash size + frequency
+              offset 0x04   4 bytes  entry point              (LE u32)
+              offset 0x08  16 bytes  extended header (wp pin, drive, chip id ...)
+              offset 0x18           then, REPEATED once per segment:
+                                        8 bytes  load_addr (LE u32) + data_len (LE u32)
+                                        data_len bytes  segment payload
+              after all segments     pad to 16 bytes, 1 checksum byte, 32-byte SHA-256
+
+              NOTE: the 8-byte segment headers are INTERLEAVED with the payloads -- each
+              header is immediately followed by its own segment's data.  There is no
+              contiguous "segment table" at 0x18.  Verified against
+              `esptool --chip esp32s3 image_info`, whose "File offs" column is the
+              offset of each segment's 8-byte header.
+
+          Why load_addr == 0 is fatal here (proved on real hardware 2026-09-17):
+              NuttX's OWN secondary loader treats it as harmless padding:
+                  nuttx/arch/xtensa/src/common/espressif/esp_loader.c:65
+                  "#define IS_PADD(addr) (addr == 0)"
+              but that symbol belongs to NuttX's loader, NOT to the chip ROM.  This
+              project builds with CONFIG_ESPRESSIF_SIMPLE_BOOT=y, so there is no
+              second-stage bootloader: the ROM itself parses nuttx.bin.  The ESP32-S3
+              ROM (ESP-ROM:esp32s3-20210327) does not skip the segment -- it copies
+              data_len bytes to address 0 and faults:
+                  Guru Meditation Error: Core 0 panic'ed (StoreProhibited)
+                  EXCVADDR: 0x00000000
+              then reboots forever on TG0WDT_SYS_RST.  (esptool gets away with these
+              segments everywhere else because ESP-IDF always parses its app image with
+              a second-stage bootloader, which DOES skip them.)
+
+          Exit status: 0 = PASS, 1 = FAIL (bad magic / truncated / zero load addr /
+          too few segments).  The full segment table is printed on both paths.
+          """
+
+          from __future__ import annotations
+
+          import os
+          import struct
+          import sys
+
+          IMAGE_MAGIC = 0xE9
+          HEADER_LEN = 24          # 8-byte common header + 16-byte ESP32-S3 extended header
+          SEG_HEADER_LEN = 8       # load_addr (LE u32) + data_len (LE u32)
+          MIN_SEGMENTS = 3         # healthy images here carry 5-6 segments
+
+
+          class ImageError(Exception):
+              """Raised when the image cannot be parsed or fails the gate."""
+
+
+          def _hex(value: int) -> str:
+              """Format a value as a fixed-width 32-bit hex string."""
+              return "0x%08x" % (value & 0xFFFFFFFF)
+
+
+          def parse_image(blob: bytes) -> dict:
+              """Parse an ESP32-S3 firmware image.
+
+              Args:
+                  blob: The complete image file content.
+
+              Returns:
+                  Dict with ``segcount``, ``entry`` and ``segments``; each element of
+                  ``segments`` is a dict with ``index``, ``load_addr``, ``data_len``,
+                  ``hdr_off`` and ``data_off``.
+
+              Raises:
+                  ImageError: If the magic byte is wrong or any structure is truncated.
+              """
+              size = len(blob)
+              min_size = HEADER_LEN + SEG_HEADER_LEN
+              if size < min_size:
+                  raise ImageError(
+                      "file is only %d bytes -- not even a %d-byte image header plus one "
+                      "%d-byte segment header (%d bytes); this is not a complete ESP "
+                      "firmware image" % (size, HEADER_LEN, SEG_HEADER_LEN, min_size)
+                  )
+
+              magic = blob[0]
+              if magic != IMAGE_MAGIC:
+                  raise ImageError(
+                      "bad image magic: byte 0 is 0x%02x, expected 0x%02x "
+                      "(esp_image_header_t.magic) -- this is not an ESP firmware image"
+                      % (magic, IMAGE_MAGIC)
+                  )
+
+              segcount = blob[1]
+              entry = struct.unpack_from("<I", blob, 4)[0]
+
+              if segcount < 1:
+                  raise ImageError(
+                      "header declares %d segments -- an image with no segments cannot "
+                      "boot" % segcount
+                  )
+
+              segments = []
+              off = HEADER_LEN
+              for index in range(segcount):
+                  if off + SEG_HEADER_LEN > size:
+                      raise ImageError(
+                          "segment table truncated: segment %d's 8-byte header needs file "
+                          "offsets %d..%d, but the file is only %d bytes (header declares "
+                          "%d segments)" % (index, off, off + SEG_HEADER_LEN, size, segcount)
+                      )
+                  load_addr, data_len = struct.unpack_from("<II", blob, off)
+                  data_off = off + SEG_HEADER_LEN
+                  if data_off + data_len > size:
+                      raise ImageError(
+                          "segment %d data truncated: it declares load_addr=%s data_len=%d "
+                          "(0x%x) with payload at file offset %d, which needs %d bytes, but "
+                          "the file is only %d bytes"
+                          % (
+                              index,
+                              _hex(load_addr),
+                              data_len,
+                              data_len,
+                              data_off,
+                              data_off + data_len,
+                              size,
+                          )
+                      )
+                  segments.append(
+                      {
+                          "index": index,
+                          "load_addr": load_addr,
+                          "data_len": data_len,
+                          "hdr_off": off,
+                          "data_off": data_off,
+                      }
+                  )
+                  off = data_off + data_len
+
+              return {
+                  "segcount": segcount,
+                  "entry": entry,
+                  "segments": segments,
+                  "end_off": off,
+              }
+
+
+          def _pad_probe(blob: bytes, seg: dict) -> str:
+              """Describe the payload of a zero-address segment (forensics only)."""
+              payload = blob[seg["data_off"]:seg["data_off"] + seg["data_len"]]
+              if not payload:
+                  return "   payload: (empty)"
+              first = " ".join("%02x" % b for b in payload[:16])
+              if len(set(payload)) == 1:
+                  filling = "all %d payload bytes are 0x%02x" % (len(payload), payload[0])
+              else:
+                  filling = "payload has mixed content"
+              return "   payload[0:16]: %s | %s" % (first, filling)
+
+
+          def render_table(path: str, blob: bytes, image: dict) -> str:
+              """Render the whole segment table as a multi-line string."""
+              lines = []
+              lines.append("== ESP IMAGE SEGMENT TABLE: %s ==" % path)
+              lines.append("   file size    : %d bytes" % len(blob))
+              lines.append("   magic        : 0x%02x (ok)" % blob[0])
+              lines.append("   segcount     : %d" % image["segcount"])
+              lines.append("   entry point  : %s" % _hex(image["entry"]))
+              lines.append("   first seg hdr: 0x%x  (%d-byte image header)" % (HEADER_LEN, HEADER_LEN))
+              lines.append("   last byte of last segment data: 0x%x" % image["end_off"])
+              lines.append("")
+              lines.append(
+                  "   %-4s %-12s %-10s %-10s %-10s %s"
+                  % ("idx", "load_addr", "data_len", "hdr_off", "data_off", "note")
+              )
+              for seg in image["segments"]:
+                  if seg["load_addr"] == 0:
+                      note = "ZERO LOAD ADDR -- ROM FAULTS HERE"
+                  else:
+                      note = "-"
+                  lines.append(
+                      "   %-4d %-12s 0x%-8x 0x%-8x 0x%-8x %s"
+                      % (
+                          seg["index"],
+                          _hex(seg["load_addr"]),
+                          seg["data_len"],
+                          seg["hdr_off"],
+                          seg["data_off"],
+                          note,
+                      )
+                  )
+              for seg in image["segments"]:
+                  if seg["load_addr"] == 0:
+                      lines.append("")
+                      lines.append(
+                          "   seg%d load_addr=0x00000000 data_len=0x%x -- this is the segment "
+                          "the ROM tries to copy to address 0."
+                          % (seg["index"], seg["data_len"])
+                      )
+                      lines.append(_pad_probe(blob, seg))
+              return "\n".join(lines)
+
+
+          def check(path: str) -> int:
+              """Check one image. Returns 0 on PASS, 1 on FAIL."""
+              if not os.path.isfile(path):
+                  sys.stdout.write("== ZERO-ADDR GATE FAIL: no such file: %s ==\n" % path)
+                  return 1
+
+              with open(path, "rb") as handle:
+                  blob = handle.read()
+
+              try:
+                  image = parse_image(blob)
+              except ImageError as exc:
+                  sys.stdout.write("== ZERO-ADDR GATE FAIL: cannot parse image header ==\n")
+                  sys.stdout.write("   %s\n" % exc)
+                  sys.stdout.write("   A corrupt or non-ESP image is never bootable.\n")
+                  return 1
+
+              sys.stdout.write(render_table(path, blob, image) + "\n")
+
+              zero_segments = [s for s in image["segments"] if s["load_addr"] == 0]
+              problems = []
+              if zero_segments:
+                  problems.append(
+                      "%d segment(s) with load address 0 (indexes: %s)"
+                      % (
+                          len(zero_segments),
+                          ", ".join(str(s["index"]) for s in zero_segments),
+                      )
+                  )
+              if image["segcount"] < MIN_SEGMENTS:
+                  problems.append(
+                      "segment count is %d, minimum for a healthy image is %d"
+                      % (image["segcount"], MIN_SEGMENTS)
+                  )
+
+              # One value per line: the CI gates scrape these with an anchored
+              # `sed -n 's/^KEY=\([0-9][0-9]*\).*/\1/p'`, so KEY must start the line.
+              sys.stdout.write("\nSEGCOUNT=%d\n" % image["segcount"])
+              sys.stdout.write("ZERO_LOAD_ADDR_SEGMENTS=%d\n" % len(zero_segments))
+
+              if problems:
+                  sys.stdout.write("== ZERO-ADDR GATE FAIL: %s ==\n" % "; ".join(problems))
+                  sys.stdout.write(
+                      "   A segment with load address 0 is NOT harmless padding on this\n"
+                      "   board.  nuttx/arch/xtensa/src/common/espressif/esp_loader.c:65\n"
+                      "   ('#define IS_PADD(addr) (addr == 0)') is NuttX's own SECONDARY\n"
+                      "   loader, not the chip ROM.  This image is built with\n"
+                      "   CONFIG_ESPRESSIF_SIMPLE_BOOT=y, so there is no second-stage\n"
+                      "   bootloader: ESP-ROM:esp32s3-20210327 parses nuttx.bin itself, it\n"
+                      "   does NOT skip a zero-address segment, it copies data_len bytes to\n"
+                      "   address 0 and takes a StoreProhibited fault\n"
+                      "   (Guru Meditation Error ... StoreProhibited, EXCVADDR:\n"
+                      "   0x00000000), then reboots forever on TG0WDT_SYS_RST.\n"
+                      "   run#68/#69 (787632 bytes, md5 71e92552cc0fe0f73a3147a6cca5a8ae)\n"
+                      "   HAVE [IROM], [DROM] and a VALID Validation Hash and still brick\n"
+                      "   for exactly this reason, which is why the IROM/DROM/hash gate\n"
+                      "   alone is not sufficient.  esptool labels these segments\n"
+                      "   [PADDING] purely because its per-chip table maps\n"
+                      "   0x00000000-0x00010000 to 'PADDING'\n"
+                      "   (esptool/targets/esp32s3.py MEMORY_MAP) -- that is esptool's\n"
+                      "   classification, not a promise from the ROM.\n"
+                      "   Origin: esptool elf2image MMU-page (64 KB) alignment padding,\n"
+                      "   esptool/bin_image.py save(): pad_segment = ImageSegment(0, ...).\n"
+                      "   Full segment table printed above.\n"
+                  )
+                  return 1
+
+              sys.stdout.write(
+                  "ZERO-ADDR GATE OK: segcount=%d, zero-load-address segments=0, entry=%s\n"
+                  % (image["segcount"], _hex(image["entry"]))
+              )
+              return 0
+
+
+          def main(argv: list) -> int:
+              """Entry point. Returns 0 if every image passes, 1 otherwise."""
+              args = [a for a in argv[1:] if a]
+              if not args:
+                  sys.stdout.write("usage: segcheck.py <image.bin> [<image.bin> ...]\n")
+                  return 2
+              rc = 0
+              for path in args:
+                  sys.stdout.write("-" * 78 + "\n")
+                  if check(path) != 0:
+                      rc = 1
+              sys.stdout.write("-" * 78 + "\n")
+              return rc
+
+
+          if __name__ == "__main__":
+              sys.exit(main(sys.argv))
+          SEGCHECK_PY
+          echo "segcheck.py generated: $(wc -l < /tmp/segcheck.py) lines" >> build.log
           export VELA_USE_MAKEFILE=1
           # Override the envsetup default (which appends -Werror): the official
           # esp32s3 chip layer (esp32s3_libc_stubs.c 'noreturn' warning) does not
@@ -601,11 +948,23 @@ jobs:
           #                                serial produced 0 bytes)
           #   a healthy image          ->  boots normally
           #
-          # HISTORY OF WRONG JUDGEMENTS (both disproved -- do not reintroduce):
-          #   1) "segcount == 5" -- run#68 drew SIX segments (two load_addr==0
-          #      PADDING segments emitted by NuttX's own esp_loader.c,
-          #      `#define IS_PADD(addr) (addr == 0)`) yet was structurally
-          #      healthy.  Segment COUNT is not the predictor.
+          # HISTORY OF WRONG JUDGEMENTS (all disproved -- do not reintroduce):
+          #   1) "segcount == 5" -- run#68 drew SIX segments.  The COUNT is
+          #      still not the predictor, but the reason this comment used to
+          #      give was WRONG.  It claimed the two load_addr==0 segments were
+          #      harmless, "PADDING segments emitted by NuttX's own
+          #      esp_loader.c (`#define IS_PADD(addr) (addr == 0)`) yet
+          #      structurally healthy".  Flashing run#68 to a real board
+          #      disproved that on 2026-09-17:
+          #          load:0x00000000,len:0x1528
+          #          Guru Meditation Error: Core 0 panic'ed (StoreProhibited)
+          #          EXCVADDR: 0x00000000
+          #          A12     : 0x00001528     <-- == that segment's length
+          #          Backtrace: 0x40045abc ...   (all in ROM)
+          #      then endless TG0WDT_SYS_RST reboots.  IS_PADD() belongs to
+          #      NuttX's own SECONDARY loader; SIMPLE_BOOT has none, so the
+          #      ROM parses this image and does NOT skip the segment.  A zero
+          #      load address is a HARD FAILURE -- see the ZERO-ADDR GATE.
           #   2) "classify load_addr against a hand-written map" -- a
           #      hand-rolled window table mislabelled the ESP32-S3 DRAM window
           #      0x3FC80000-0x3FD00000 as "DROM-low".  It is NOT DROM: esptool
@@ -646,9 +1005,13 @@ jobs:
           #     + Validation Hash: (valid)
           #   run#67 (BLACK SCREEN, 2 seg): [DRAM] 0x3fc9a350, [IRAM] 0x40374000
           #     -- no IROM, no DROM, NO Validation Hash line
-          #   run#68 (6 seg, healthy): [DRAM] 0x3fc9b180, [IRAM] 0x40374000,
-          #     [PADDING] 0x0, [DROM] 0x3c010000, [PADDING] 0x0, [IROM] 0x42040000
+          #   run#68/69 (6 seg, BRICKS ON REAL HARDWARE while passing every
+          #     check above): [DRAM] 0x3fc9b180, [IRAM] 0x40374000,
+          #     [PADDING] 0x0 (len 0x1528), [DROM] 0x3c010000,
+          #     [PADDING] 0x0 (len 0x4678), [IROM] 0x42040000
           #     + Validation Hash: (valid)
+          #     -> [IROM] + [DROM] + a valid hash are NOT sufficient.  Only
+          #        the ZERO-ADDR GATE below catches this image.
           # ------------------------------------------------------------------
           # Invoke esptool exactly as the rest of this workflow does
           # (`python3 -m esptool`, esptool 4.8.1 installed earlier); fall back
@@ -669,9 +1032,46 @@ jobs:
           drom="$(printf '%s\n' "$esptool_info" | grep -c '\[DROM\]')" || true
           vhash="$(printf '%s\n' "$esptool_info" | grep -c 'Validation Hash:.*(valid)')" || true
           echo "BOOTABILITY GATE: esptool_rc=$esptool_rc irom=$irom drom=$drom validation_hash=$vhash" >> build.log
-          if [ "$esptool_rc" -ne 0 ] || [ "${irom:-0}" -lt 1 ] || [ "${drom:-0}" -lt 1 ] || [ "${vhash:-0}" -lt 1 ]; then
+          # ------------------------------------------------------------------
+          # ZERO-LOAD-ADDRESS GATE, part 2/3 -- the verdict gate, HARD FAIL.
+          # Full rationale and the hardware capture are in part 1/3 (build
+          # step).  Short version: a segment whose load address is 0 is NOT
+          # padding the ROM skips.  run#68/#69 (787632 bytes, md5
+          # 71e92552cc0fe0f73a3147a6cca5a8ae) HAVE [IROM], [DROM] and a VALID
+          # Validation Hash -- every check above passes -- and still brick
+          # with StoreProhibited / EXCVADDR 0x00000000.  So the esptool
+          # checks above cannot catch this alone; this check does.
+          #
+          # /tmp/segcheck.py parses the ESP image header itself and rejects
+          # the image when ANY segment has load address 0, or when there are
+          # fewer than 3 segments.  The >= 3 floor is belt and braces: both
+          # known-bad families had 2 segments or 6-with-zeros, while a
+          # healthy image here carries 5-6.  6 healthy segments are
+          # legitimate, so this is deliberately a FLOOR and NOT a
+          # `segcount == 5` requirement -- do not reintroduce that.
+          # ------------------------------------------------------------------
+          zeroaddr_rc=0
+          seg_n=-1
+          seg_zero=-1
+          if [ ! -f /tmp/segcheck.py ]; then
+            echo "== BUILD FAILED: ZERO-ADDR GATE -- /tmp/segcheck.py is missing ==" >> build.log
+            echo "   The build step must generate it (part 1/3) before this gate." >> build.log
+            echo "   Without it no image can be proven free of zero load-address" >> build.log
+            echo "   segments, so the gate fails rather than guesses." >> build.log
+            zeroaddr_rc=2
+          else
+            python3 /tmp/segcheck.py nuttx/nuttx.bin > /tmp/segcheck.out 2>&1 || zeroaddr_rc=$?
+            echo "== ZERO-ADDR GATE: python3 /tmp/segcheck.py nuttx/nuttx.bin (rc=$zeroaddr_rc) ==" >> build.log
+            tee -a build.log < /tmp/segcheck.out
+            seg_n="$(sed -n 's/^SEGCOUNT=\([0-9][0-9]*\).*/\1/p' /tmp/segcheck.out 2>/dev/null | head -n1)" || true
+            seg_zero="$(sed -n 's/^ZERO_LOAD_ADDR_SEGMENTS=\([0-9][0-9]*\).*/\1/p' /tmp/segcheck.out 2>/dev/null | head -n1)" || true
+            : "${seg_n:=-1}"
+            : "${seg_zero:=-1}"
+          fi
+          echo "ZERO-ADDR GATE: rc=$zeroaddr_rc segcount=${seg_n} zero_load_addr_segments=${seg_zero}" >> build.log
+          if [ "$esptool_rc" -ne 0 ] || [ "${irom:-0}" -lt 1 ] || [ "${drom:-0}" -lt 1 ] || [ "${vhash:-0}" -lt 1 ] || [ "$zeroaddr_rc" -ne 0 ]; then
             echo "== BUILD FAILED: BOOTABILITY GATE -- image not provably bootable ==" >> build.log
-            echo "   esptool_rc=$esptool_rc irom=$irom drom=$drom validation_hash=$vhash." >> build.log
+            echo "   esptool_rc=$esptool_rc irom=$irom drom=$drom validation_hash=$vhash zeroaddr_rc=$zeroaddr_rc segcount=${seg_n} zero_load_addr_segments=${seg_zero}." >> build.log
             echo "   A bootable image needs >=1 [IROM], >=1 [DROM] and a" >> build.log
             echo "   'Validation Hash: ... (valid)' line (esptool's own per-chip" >> build.log
             echo "   segment classification -- do NOT hand-write address windows)." >> build.log
@@ -683,11 +1083,41 @@ jobs:
             echo "   did not apply.  Check the 'NUTTX PATCH' lines in bsp.log; if none" >> build.log
             echo "   appear, the patch loop never executed and the PATCH CHECK gate" >> build.log
             echo "   was skipped with it." >> build.log
+            if [ "$zeroaddr_rc" -ne 0 ]; then
+              echo "   ZERO-ADDR GATE FAILED (rc=$zeroaddr_rc, segcount=${seg_n}," >> build.log
+              echo "   zero_load_addr_segments=${seg_zero}): at least one segment has" >> build.log
+              echo "   load address 0.  THE ROM WILL FAULT ON IT.  This is not" >> build.log
+              echo "   padding the ROM skips -- esp_loader.c's IS_PADD() belongs to" >> build.log
+              echo "   NuttX's own secondary loader, and SIMPLE_BOOT means there is" >> build.log
+              echo "   none: ESP-ROM:esp32s3-20210327 parses this image, copies" >> build.log
+              echo "   data_len bytes to address 0 and takes StoreProhibited" >> build.log
+              echo "   (EXCVADDR 0x00000000), then reboots forever on" >> build.log
+              echo "   TG0WDT_SYS_RST.  esptool calling the segment [PADDING] only" >> build.log
+              echo "   reflects its own 0x00000000-0x00010000 MEMORY_MAP entry." >> build.log
+              echo "   These segments come from esptool elf2image MMU-page (64 KB)" >> build.log
+              echo "   alignment padding (esptool/bin_image.py save(): pad_segment =" >> build.log
+              echo "   ImageSegment(0, ...)), NOT from merge_bin and NOT from the" >> build.log
+              echo "   linker -- the payload is literal 0x00 filler esptool makes up." >> build.log
+              echo "   Fix belongs upstream of this file (elf2image options in" >> build.log
+              echo "   nuttx/tools/esp32s3/Config.mk or the flash LMA layout);" >> build.log
+              echo "   this gate only refuses to ship it." >> build.log
+            fi
+            if [ "$seg_n" -ge 0 ] && [ "$seg_n" -lt 3 ]; then
+              echo "   SEGMENT COUNT FLOOR FAILED: segcount=${seg_n} < 3.  A healthy" >> build.log
+              echo "   image here has 5-6 segments; 2 is the --ram-only-header" >> build.log
+              echo "   fingerprint (run#55/67, 0 serial bytes)." >> build.log
+            fi
+            echo "   --- full ESP segment table (all segments, all load addresses) ---" >> build.log
+            if [ -f /tmp/segcheck.out ]; then
+              cat /tmp/segcheck.out >> build.log
+            else
+              echo "   (segment table unavailable: /tmp/segcheck.out not produced)" >> build.log
+            fi
             echo "   --- esptool image_info output follows ---" >> build.log
             printf '%s\n' "$esptool_info" >> build.log
             exit 1
           fi
-          echo "BUILD OK: nuttx/nuttx.bin present (${size} bytes, magic 0xE9, m rc=$rc, irom=$irom drom=$drom vhash=$vhash)" >> build.log
+          echo "BUILD OK: nuttx/nuttx.bin present (${size} bytes, magic 0xE9, m rc=$rc, irom=$irom drom=$drom vhash=$vhash, segcount=${seg_n}, zero_load_addr_segments=${seg_zero}, zeroaddr_rc=$zeroaddr_rc)" >> build.log
           ls -la nuttx/nuttx nuttx/nuttx.bin >> build.log 2>&1
 
       - name: Collect firmware
@@ -757,8 +1187,14 @@ jobs:
           echo "== Collect: SEGMENT TABLE (bootability gate) =="
           # 2026-09-17 real-device A/B, REVISED AGAIN -- esptool is the judge.
           # TWO earlier judgements were WRONG:
-          #   1) "segcount == 5": run#68 drew 6 segments (two load_addr==0
-          #      PADDING segments) yet was healthy -- count is not the predictor.
+          #   1) "segcount == 5": run#68 drew 6 segments -- count is still not
+          #      the predictor, BUT "the two load_addr==0 segments are harmless
+          #      PADDING and the image is healthy" was WRONG (2026-09-17):
+          #      flashed to a real board it panics with StoreProhibited /
+          #      EXCVADDR 0x00000000 on the first zero segment (len 0x1528 ==
+          #      A12 in the register dump) and reboots forever.  Zero load
+          #      address == HARD FAIL; see the ZERO-ADDR GATE part 1/3 in the
+          #      build step.
           #   2) hand-written address windows: 0x3FC80000-0x3FD00000 was wrongly
           #      called "DROM-low" -- it is DRAM.  esptool classifies every
           #      0x3fc8.. / 0x3fc9.. segment as [BYTE_ACCESSIBLE,MEM_INTERNAL,
@@ -773,8 +1209,11 @@ jobs:
           #        line == the --ram-only-header fingerprint.
           #   run#52 (boots cleanly): [DROM],[DRAM],[IRAM],[IROM],[IRAM]
           #     + Validation Hash: (valid).
-          #   run#68 (6 seg, healthy): [DRAM],[IRAM],[PADDING],[DROM],
-          #     [PADDING],[IROM] + Validation Hash: (valid).
+          #   run#68/69 (6 seg, BRICKS ON REAL HARDWARE while passing all of
+          #     the above): [DRAM],[IRAM],[PADDING] 0x0 (len 0x1528),[DROM],
+          #     [PADDING] 0x0 (len 0x4678),[IROM] + Validation Hash: (valid).
+          #     -> so [IROM] + [DROM] + valid hash are NOT sufficient; the
+          #        ZERO-ADDR GATE below is what actually catches it.
           # Gate: require >=1 [IROM] AND >=1 [DROM] AND a 'Validation Hash:
           # ... (valid)' line.  If esptool itself fails (rc != 0), treat it as
           # a gate failure (never pass an unproven image because a tool died).
@@ -792,15 +1231,54 @@ jobs:
           drom="$(printf '%s\n' "$esptool_info" | grep -c '\[DROM\]')" || true
           vhash="$(printf '%s\n' "$esptool_info" | grep -c 'Validation Hash:.*(valid)')" || true
           echo "esptool_rc=$esptool_rc irom=$irom drom=$drom validation_hash=$vhash (need >=1 each)"
+          # ------------------------------------------------------------------
+          # ZERO-LOAD-ADDRESS GATE, part 3/3 -- Collect.
+          # Same checker, same rules as the verdict gate (part 2/3); rationale
+          # and the hardware capture are in part 1/3 (build step).
+          # A segment with load address 0 makes ESP-ROM:esp32s3-20210327 copy
+          # data_len bytes to address 0 -> StoreProhibited, EXCVADDR
+          # 0x00000000, endless TG0WDT_SYS_RST reboots.  run#68/#69 prove
+          # [IROM] + [DROM] + a VALID Validation Hash are not enough to catch
+          # it, so this runs in addition to the esptool checks.
+          # Also enforces the >= 3 segment floor (2 == the --ram-only-header
+          # fingerprint).  6 healthy segments are fine; this is a floor, NOT
+          # `segcount == 5`.
+          # Non-fatal here on purpose -- the verdict step decides pass/fail,
+          # and Collect still stages the binary for inspection.
+          # ------------------------------------------------------------------
+          zeroaddr_rc=0
+          seg_n=-1
+          seg_zero=-1
+          if [ ! -f /tmp/segcheck.py ]; then
+            echo "== ZERO-ADDR GATE FAILED: /tmp/segcheck.py missing (build step did not generate it) =="
+            zeroaddr_rc=2
+          else
+            python3 /tmp/segcheck.py nuttx/nuttx.bin > /tmp/segcheck.out 2>&1 || zeroaddr_rc=$?
+            echo "== ZERO-ADDR GATE: python3 /tmp/segcheck.py nuttx/nuttx.bin (rc=$zeroaddr_rc) =="
+            tee -a build.log < /tmp/segcheck.out
+            seg_n="$(sed -n 's/^SEGCOUNT=\([0-9][0-9]*\).*/\1/p' /tmp/segcheck.out 2>/dev/null | head -n1)" || true
+            seg_zero="$(sed -n 's/^ZERO_LOAD_ADDR_SEGMENTS=\([0-9][0-9]*\).*/\1/p' /tmp/segcheck.out 2>/dev/null | head -n1)" || true
+            : "${seg_n:=-1}"
+            : "${seg_zero:=-1}"
+          fi
+          echo "zeroaddr_rc=$zeroaddr_rc segcount=${seg_n} zero_load_addr_segments=${seg_zero} (need rc=0, segcount>=3 and 0 zero segments)"
           { echo "esptool_rc=$esptool_rc"
             echo "irom=$irom"
             echo "drom=$drom"
             echo "validation_hash=$vhash"
+            echo "zeroaddr_rc=$zeroaddr_rc"
+            echo "segcount=${seg_n}"
+            echo "zero_load_addr_segments=${seg_zero}"
             printf '%s\n' "$esptool_info"
           } > segcount.txt
-          if [ "$esptool_rc" -ne 0 ] || [ "${irom:-0}" -lt 1 ] || [ "${drom:-0}" -lt 1 ] || [ "${vhash:-0}" -lt 1 ]; then
+          if [ -f /tmp/segcheck.out ]; then
+            { echo "== full ESP segment table =="
+              cat /tmp/segcheck.out
+            } >> segcount.txt
+          fi
+          if [ "$esptool_rc" -ne 0 ] || [ "${irom:-0}" -lt 1 ] || [ "${drom:-0}" -lt 1 ] || [ "${vhash:-0}" -lt 1 ] || [ "$zeroaddr_rc" -ne 0 ]; then
             echo "== BOOTABILITY GATE FAILED: image not provably bootable =="
-            echo "   esptool_rc=$esptool_rc irom=$irom drom=$drom validation_hash=$vhash."
+            echo "   esptool_rc=$esptool_rc irom=$irom drom=$drom validation_hash=$vhash zeroaddr_rc=$zeroaddr_rc segcount=${seg_n} zero_load_addr_segments=${seg_zero}."
             echo "   A bootable image needs >=1 [IROM], >=1 [DROM] and a"
             echo "   'Validation Hash: ... (valid)' line (esptool's own per-chip"
             echo "   segment classification -- do NOT hand-write address windows)."
@@ -811,12 +1289,35 @@ jobs:
             echo "   Usual cause: --ram-only-header still present in"
             echo "   nuttx/tools/esp32s3/Config.mk because the nuttx patch loop"
             echo "   did not run.  See BSP SECTION 2/3 in bsp.log."
+            if [ "$zeroaddr_rc" -ne 0 ]; then
+              echo "   ZERO-ADDR GATE FAILED (rc=$zeroaddr_rc, segcount=${seg_n},"
+              echo "   zero_load_addr_segments=${seg_zero}): a segment has load"
+              echo "   address 0 and THE ROM WILL FAULT ON IT -- StoreProhibited,"
+              echo "   EXCVADDR 0x00000000, then endless TG0WDT_SYS_RST reboots."
+              echo "   esp_loader.c's IS_PADD() is NuttX's own secondary loader;"
+              echo "   SIMPLE_BOOT has none, so ESP-ROM:esp32s3-20210327 parses"
+              echo "   this image itself and does NOT skip the segment.  esptool's"
+              echo "   [PADDING] label is just its 0x00000000-0x00010000 MEMORY_MAP"
+              echo "   entry.  Origin: esptool elf2image 64 KB MMU-page alignment"
+              echo "   padding (esptool/bin_image.py save(): pad_segment ="
+              echo "   ImageSegment(0, ...)) -- not merge_bin, not the linker."
+            fi
+            if [ "$seg_n" -ge 0 ] && [ "$seg_n" -lt 3 ]; then
+              echo "   SEGMENT COUNT FLOOR FAILED: segcount=${seg_n} < 3 (healthy"
+              echo "   images here have 5-6; 2 == --ram-only-header fingerprint)."
+            fi
             echo "   NOT a hard failure here on purpose -- the verdict step decides,"
             echo "   so Collect still stages the binary for inspection."
+            echo "   --- full ESP segment table follows ---"
+            if [ -f /tmp/segcheck.out ]; then
+              cat /tmp/segcheck.out
+            else
+              echo "   (segment table unavailable: /tmp/segcheck.out not produced)"
+            fi
             echo "   --- esptool image_info output follows ---"
             printf '%s\n' "$esptool_info"
           else
-            echo "BOOTABILITY GATE OK: irom=$irom drom=$drom validation_hash=$vhash"
+            echo "BOOTABILITY GATE OK: irom=$irom drom=$drom validation_hash=$vhash zeroaddr_rc=$zeroaddr_rc segcount=${seg_n} zero_load_addr_segments=${seg_zero}"
           fi
           cp -v segcount.txt firmware/ 2>&1 || true
           echo "== Collect: firmware/ contents =="
