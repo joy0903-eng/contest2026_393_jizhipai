@@ -1,4 +1,4 @@
-Wrap bootloader_init() sub-stages + SOURCE-LEVEL exception capture hooks (v9)
+Wrap bootloader_init() sub-stages + SOURCE-LEVEL exception capture hooks (v10)
 
 arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c (new, rewritten)
 arch/xtensa/src/esp32s3/hal.mk
@@ -16,24 +16,26 @@ never written, the >0 marker gone), i.e. that store faults outright
 while the slot stores are silently dropped.  Conclusion: no runtime
 writes to the vector region at all.
 
-v9 changes:
-- xtensa_vectors.S: the level2/level3/nmi/kernel/user vectors now call
-  hb_exc_stub_180/1c0/2c0/300/340 and the double-exception vector body
-  is collapsed into a call0 hb_exc_stub_3c0 -- link-time symbol
-  resolution, zero runtime writes.  Window vectors untouched.
-- esp32s3_boot_hb_wrap.c: hb_arm_exc_probe no longer writes anywhere;
-  it only reads back the live vecbase for the [HB] ARM health line.
-  hb_dump_prev re-arms hb_exc_area[0] after dumping (the bss-clearing
-  bootloader stage never runs in this debug configuration, so the asm
-  guard would otherwise see cold-boot garbage and skip every capture).
-- Boot-stage heartbeat probes and the v5 ROM-stack switch kept.
+v9 (run86, capture rate 35/35) proved the source-level hooks work:
+first exception = slot 14 (user vector), cause 0 (Illegal), EPC1 =
+bootloader_init+0 -- the first `entry a1, 32` of bootloader_init --
+while flash/ELF hold the exact legal bytes there (esptool readback is
+byte-identical) and PS.WOE=1.  Same death at 40 MHz and 80 MHz header
+config; ROM SHA mismatch is present since run85 and deterministic.
+
+v10 changes (answer: what does the CPU actually FETCH at EPC1?):
+- esp32s3_boot_hb_wrap.c: hb_exc_area grows to 19 words; the stub's
+  asm common body reads 7 words (28 bytes) directly from EPC1 into
+  area[12..18] before spinning (no function call, no window use); the
+  next boot hb_dump_prev prints them as a [HB] IRAM line.
+- Vector hooks unchanged from v9.
 
 Debug-only change; probes to be reverted once boot is verified.
 
 diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
 --- /dev/null
 +++ b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
-@@ -0,0 +1,512 @@
+@@ -0,0 +1,548 @@
 +/****************************************************************************
 + * arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
 + *
@@ -288,7 +290,12 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 + * Plain .bss/DRAM (data only); the bss-clearing init_mem stage never
 + * runs because we die before it, so values persist across boots. */
 +
-+uint32_t hb_exc_area[12];
++/* [0..11] as before.  v10 adds [12..18]: seven words read straight out
++ * of IRAM at EPC1 by the stub before spinning -- what the CPU actually
++ * fetched at the faulting instruction (run86: entry@bootloader_init
++ * raised Illegal although flash/ELF hold a legal entry there). */
++
++uint32_t hb_exc_area[19];
 +
 +/* Arm-time audit, written every boot by hb_arm_exc_probe and dumped
 + * before the capture record: [0]=live vecbase (proves the CPU is on
@@ -370,6 +377,22 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +      ets_printf(buf);
 +    }
 +
++  /* v10: seven words the stub fetched from IRAM at EPC1 before spinning
++   * (area[12..18]); 28 bytes starting at the faulting instruction. */
++  if (id >= 1 && id <= 15 && hb_exc_area[3] != 0)
++    {
++      p = buf;
++      hb_put_tag(&p, 'I', 'R', 'A', 'M', ' ', ' ', ' ', ' ');
++      for (i = 12; i < 19; i++)
++        {
++          hb_fmt_hex(p, hb_exc_area[i]);
++          p += 8;
++          *p++ = (i == 18) ? '\n' : ' ';
++        }
++      *p = '\0';
++      ets_printf(buf);
++    }
++
 +  hb_exc_area[0] = 0;
 +}
 +
@@ -416,6 +439,21 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +  "  s32i a6, a3, 0\n"
 +  "  rsr.vecbase a2\n"
 +  "  s32i a2, a3, 28\n"
++  "  rsr.epc1 a5\n"
++  "  l32i a2, a5, 0\n"
++  "  s32i a2, a3, 48\n"
++  "  l32i a2, a5, 4\n"
++  "  s32i a2, a3, 52\n"
++  "  l32i a2, a5, 8\n"
++  "  s32i a2, a3, 56\n"
++  "  l32i a2, a5, 12\n"
++  "  s32i a2, a3, 60\n"
++  "  l32i a2, a5, 16\n"
++  "  s32i a2, a3, 64\n"
++  "  l32i a2, a5, 20\n"
++  "  s32i a2, a3, 68\n"
++  "  l32i a2, a5, 24\n"
++  "  s32i a2, a3, 72\n"
 +  "7: j 7b\n"
 +  "  .balign 4\n"
 +  "  .globl hb_exc_stub_000\n"
