@@ -29,7 +29,7 @@ Debug-only change; probes to be reverted once boot is verified.
 diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
 --- /dev/null
 +++ b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
-@@ -0,0 +1,231 @@
+@@ -0,0 +1,329 @@
 +/****************************************************************************
 + * arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
 + *
@@ -67,6 +67,7 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 + ****************************************************************************/
 +
 +#include <stdbool.h>
++#include <stdint.h>
 +
 +#define HB_IRAM __attribute__((section(".iram1")))
 +
@@ -261,6 +262,103 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +  __real_bootloader_enable_random();
 +  hb_mark('H', '<');
 +}
++
++/* ---- v6: primary-exception capture (run82 lesson) -------------------
++ * Runs 76/78/79/80/82 all die after >0 with code placement, image
++ * content, window depth and stack proven clean (flash == ELF verified
++ * byte-exact on run82).  The only remaining unknown is the CAUSE of the
++ * primary exception, which the storm (double exception -> panic) masks.
++ * We rewrite the user-exception vector slot (vecbase+0x340) to jump into
++ * a probe that stores EXCCAUSE/EXCVADDR/EPC1/EXCSAVE1 into DRAM and then
++ * spins (no context save -> no storm).  TG0WDT resets ~8 s later; DRAM
++ * survives a soft reset, so the next boot prints the captured cause
++ * before re-arming.  Debug-only; reverted with the rest of 0004. */
++
++/* Storage for the captured registers (plain .bss/DRAM -- data only, and
++ * TG0WDT soft resets preserve it; the bss-clearing init_mem stage never
++ * runs because we die before it, so values persist across boot cycles). */
++
++uint32_t hb_exc_area[4];
++
++HB_IRAM static void hb_fmt_hex(char *p, uint32_t v)
++{
++  int i;
++
++  for (i = 7; i >= 0; i--)
++    {
++      uint32_t d = v & 15;
++
++      p[i] = (d < 10) ? ('0' + d) : ('a' + d - 10);
++      v >>= 4;
++    }
++}
++
++HB_IRAM void hb_dump_prev(void)
++{
++  char buf[48];
++  char *p = buf;
++
++  if (hb_exc_area[0] == 0 && hb_exc_area[2] == 0)
++    {
++      return;
++    }
++
++  *p++ = '[';  *p++ = 'H';  *p++ = 'B';  *p++ = ']';  *p++ = ' ';
++  *p++ = 'E';  *p++ = 'X';  *p++ = 'C';  *p++ = ' ';
++  hb_fmt_hex(p, hb_exc_area[0]);  p += 8;  *p++ = ' ';
++  hb_fmt_hex(p, hb_exc_area[1]);  p += 8;  *p++ = ' ';
++  hb_fmt_hex(p, hb_exc_area[2]);  p += 8;  *p++ = ' ';
++  hb_fmt_hex(p, hb_exc_area[3]);  p += 8;
++  *p++ = '\n';
++  *p = '\0';
++  ets_printf(buf);
++}
++
++/* Naked probe: capture the four exception registers, then spin.  Runs
++ * with unknown stack/window state, so it must have NO prologue at all
++ * (Xtensa GCC has no naked attribute) -- written as file-level asm in
++ * .iram1, so the emitted code is exactly the instruction sequence below. */
++
++void hb_exc_probe(void);
++
++__asm__(
++  ".pushsection .iram1, \"ax\", @progbits\n"
++  "  .globl hb_exc_probe\n"
++  "  .hidden hb_exc_probe\n"
++  "hb_exc_probe:\n"
++  "  j 8f\n"
++  "  .balign 4\n"
++  "9: .word hb_exc_area\n"
++  "8: rsr.exccause a2\n"
++  "  l32r a3, 9b\n"
++  "  s32i a2, a3, 0\n"
++  "  rsr.excvaddr a2\n"
++  "  s32i a2, a3, 4\n"
++  "  rsr.epc1 a2\n"
++  "  s32i a2, a3, 8\n"
++  "  rsr.excsave1 a2\n"
++  "  s32i a2, a3, 12\n"
++  "7: j 7b\n"
++  ".popsection\n"
++);
++
++/* Rewrite the user-exception slot to `j hb_exc_probe`.  The slot layout
++ * was verified in the ELF: vecbase+0x340 = _user_exception_vector
++ * (wsr.excsave1 a0; call0 _xtensa_user_handler).  IRAM is writable and
++ * isync flushes the prefetch queue; no cache is involved. */
++
++HB_IRAM void hb_arm_exc_probe(void)
++{
++  extern uint8_t _init_start[];
++
++  volatile uint32_t *slot = (volatile uint32_t *)((uint32_t)_init_start + 0x340);
++  uint32_t pc = (uint32_t)slot;
++  int32_t off = (int32_t)((uint8_t *)hb_exc_probe - (uint8_t *)pc - 4);
++  uint32_t instr = (((uint32_t)off >> 2) & 0x3ffffu) << 6 | 0x06u;
++
++  *slot = instr;
++  __asm__ __volatile__ ("isync\n" ::: "memory");
++}
 diff --git a/arch/xtensa/src/esp32s3/hal.mk b/arch/xtensa/src/esp32s3/hal.mk
 --- a/arch/xtensa/src/esp32s3/hal.mk
 +++ b/arch/xtensa/src/esp32s3/hal.mk
@@ -297,7 +395,7 @@ diff --git a/arch/xtensa/src/esp32s3/hal.mk b/arch/xtensa/src/esp32s3/hal.mk
 diff --git a/arch/xtensa/src/esp32s3/esp32s3_start.c b/arch/xtensa/src/esp32s3/esp32s3_start.c
 --- a/arch/xtensa/src/esp32s3/esp32s3_start.c
 +++ b/arch/xtensa/src/esp32s3/esp32s3_start.c
-@@ -475,6 +475,27 @@
+@@ -475,6 +475,37 @@
    __asm__ __volatile__ ("wsr %0, vecbase\n"::"r" (_init_start));
  
    ets_printf("[HB] @A vecbase set\n");
@@ -320,6 +418,16 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_start.c b/arch/xtensa/src/esp32s3/e
 +                      IDLETHREAD_STACKWORDS * sizeof(uint32_t) - 64;
 +
 +    __asm__ __volatile__ ("mov a1, %0\n" :: "r" (sp_new));
++  }
++
++  /* v6: report any exception captured by the previous boot cycle, then
++   * re-arm the exception-slot probe.  See esp32s3_boot_hb_wrap.c. */
++  {
++    extern void hb_arm_exc_probe(void);
++    extern void hb_dump_prev(void);
++
++    hb_dump_prev();
++    hb_arm_exc_probe();
 +  }
 +
    if (bootloader_init() != 0)
