@@ -811,6 +811,113 @@ jobs:
               sys.exit(main(sys.argv))
           SEGCHECK_PY
           echo "segcheck.py generated: $(wc -l < /tmp/segcheck.py) lines" >> build.log
+          # ------------------------------------------------------------------
+          # ZERO-LOAD-ADDR RELOCATION script (run#68..#72).  esptool pads the
+          # file so every flash-mapped segment starts on a 64 KB MMU page and
+          # emits those pads as segments with load_addr 0 (esptool/bin_image.py
+          # save(): ImageSegment(0, b"\x00"*pad_len)).  ESP-ROM:esp32s3-20210327
+          # copies EVERY segment to its load address -- la=0 means memcpy to
+          # 0x0 -> StoreProhibited, EXCVADDR 0x00000000 (real hardware,
+          # run#68/#69).  The pad payloads are 100% zeros, so we repoint them
+          # at scratch DRAM WITHOUT moving any bytes: the file offsets of the
+          # flash-mapped segments stay put, which is exactly what preserves
+          # their MMU page alignment.  0x3FC88000 is SRAM_DRAM_START; NuttX's
+          # .dram0.data sits at 0x3FC9xxxx and .bss init happens after entry,
+          # so the copies are harmless (hardware-proven: run#70/#72 with
+          # relocated padding reach the app entry).  The XOR checksum covers
+          # segment DATA only, so rewriting 4 la bytes keeps it valid.  The
+          # appended SHA-256 digest DOES cover the headers, so it is refreshed
+          # in place -- otherwise esptool image_info would flip to
+          # "Validation Hash: ... (invalid)" and the verdict gate (which
+          # requires a valid hash) would fail the very image we just fixed.
+          # The ROM itself never checks the digest under SIMPLE_BOOT.
+          # ------------------------------------------------------------------
+          cat > /tmp/patch_zero_segs.py <<'PATCH_ZERO_SEGS'
+          """Repoint zero-load-address PADDING segments at scratch DRAM.
+
+          Why not delete them: esptool write_flash streams the .bin
+          sequentially and the *file offsets* are what keep the later
+          flash-mapped segments on their required 64 KB MMU pages.
+          Why the sanity check: a la=0 segment whose payload is NOT all
+          zeros is not padding -- refuse to touch it.
+          """
+          import hashlib
+          import struct
+          import sys
+
+          SCRATCH_BASE = 0x3FC88000  # SRAM_DRAM_START; .dram0.data at 0x3FC9xxxx
+          SCRATCH_LIMIT = 0x3FC90000  # hard stop before .dram0.data origin
+
+
+          def parse(path):
+              data = bytearray(open(path, "rb").read())
+              if len(data) < 24 or data[0] != 0xE9:
+                  raise SystemExit("bad magic/size -- not an ESP firmware image")
+              n = data[1]
+              off = 24
+              entries = []
+              for i in range(n):
+                  if off + 8 > len(data):
+                      raise SystemExit("truncated segment header %d" % i)
+                  la, ln = struct.unpack_from("<II", data, off)
+                  if off + 8 + ln > len(data):
+                      raise SystemExit("segment %d data truncated" % i)
+                  entries.append((i, off, la, ln))
+                  off += 8 + ln
+              return data, entries
+
+
+          def main(src, dst):
+              data, entries = parse(src)
+              scratch = SCRATCH_BASE
+              fixed = []
+              for i, off, la, ln in entries:
+                  if la != 0:
+                      continue
+                  payload = data[off + 8: off + 8 + ln]
+                  if any(payload):
+                      raise SystemExit(
+                          "seg%d la=0 but payload is not all zeros "
+                          "-- NOT padding, refusing to patch" % i)
+                  struct.pack_into("<I", data, off, scratch)
+                  fixed.append((i, ln, scratch))
+                  scratch += ln
+              if not fixed:
+                  print("no zero-load-address segments; nothing to do")
+              else:
+                  for i, ln, addr in fixed:
+                      print("  seg%d: load 0x00000000 -> 0x%08x "
+                            "(len 0x%x, all zeros)" % (i, addr, ln))
+                  if scratch > SCRATCH_LIMIT:
+                      raise SystemExit(
+                          "scratch overflow 0x%08x -- would clobber .dram0.data"
+                          % scratch)
+              # Refresh the appended SHA-256 digest (last 32 bytes,
+              # hash_appended flag is byte 23) so esptool image_info keeps
+              # reporting "Validation Hash: (valid)".
+              if data[23] & 1:
+                  if len(data) < 56:
+                      raise SystemExit("image too small for an appended digest")
+                  doff = len(data) - 32
+                  data[doff:] = hashlib.sha256(bytes(data[:doff])).digest()
+                  print("  sha256 digest refreshed at 0x%x" % doff)
+              open(dst, "wb").write(bytes(data))
+              # Re-verify: re-parse the OUTPUT and count zero la segments.
+              d2, e2 = parse(dst)
+              bad = sum(1 for _, _, la, _ in e2 if la == 0)
+              print("verify: segcount=%d zero_load_addr_segments=%d"
+                    % (len(e2), bad))
+              return 0 if bad == 0 else 1
+
+
+          if __name__ == "__main__":
+              if len(sys.argv) != 3:
+                  sys.stdout.write(
+                      "usage: patch_zero_segs.py <in.bin> <out.bin>\n")
+                  sys.exit(2)
+              sys.exit(main(sys.argv[1], sys.argv[2]))
+          PATCH_ZERO_SEGS
+          echo "patch_zero_segs.py generated: $(wc -l < /tmp/patch_zero_segs.py) lines" >> build.log
           export VELA_USE_MAKEFILE=1
           # Override the envsetup default (which appends -Werror): the official
           # esp32s3 chip layer (esp32s3_libc_stubs.c 'noreturn' warning) does not
@@ -908,6 +1015,28 @@ jobs:
             grep -n 'ESPRESSIF_SIMPLE_BOOT' nuttx/.config >> build.log 2>&1 || echo "  (symbol not set)" >> build.log
             echo "M-CHAIN rc=$rc" >> build.log
             ls -la nuttx/nuttx nuttx/nuttx.bin >> build.log 2>&1
+            # ----------------------------------------------------------------
+            # ZERO-LOAD-ADDR RELOCATION, executed in place on the image make
+            # just produced (script generated in part 1/3 above; rationale in
+            # its header).  Runs BEFORE the verdict step re-parses the image
+            # so the zero-addr gate judges the SHIPPING image, not the raw
+            # elf2image output.  parse() reads the whole file before the
+            # write, so src == dst is safe.  Failure here is logged and left
+            # to the gate: segcheck will still see la=0 and fail the verdict,
+            # so a broken relocation can never ship silently.
+            # ----------------------------------------------------------------
+            if [ -f nuttx/nuttx.bin ] && [ -f /tmp/patch_zero_segs.py ]; then
+              echo "== ZERO-LOAD-ADDR RELOCATION (in-place on nuttx/nuttx.bin) ==" >> build.log
+              python3 /tmp/patch_zero_segs.py nuttx/nuttx.bin nuttx/nuttx.bin >> build.log 2>&1 \
+                || echo "== relocation reported failure (rc=$?) -- see lines above; the zero-addr gate will judge the result" >> build.log
+              if [ -f /tmp/segcheck.py ]; then
+                echo "== segcheck after relocation ==" >> build.log
+                python3 /tmp/segcheck.py nuttx/nuttx.bin >> build.log 2>&1 \
+                  || echo "== post-relocation segcheck rc=$? (see lines above)" >> build.log
+              fi
+            else
+              echo "== relocation skipped: nuttx.bin or /tmp/patch_zero_segs.py missing ==" >> build.log
+            fi
             echo "$rc" > build_rc.txt
           ) >> build.log 2>&1
           # This step always "succeeds" -- see the verdict step below.
@@ -1440,7 +1569,32 @@ jobs:
           # always a complete record (binary + log) no matter which publish
           # path fires.
           cp "${{ github.workspace }}/openvela/firmware/nuttx.bin" . 2>/dev/null || true
-          ls -la nuttx.bin 2>/dev/null || echo "  (no nuttx.bin in logs branch)"
+          # run#70/#72 forensics: ROM boots (all 6 segments, entry reached,
+          # padding relocated) but the app spins in early IRAM init -- saved
+          # PC 0x40374efb/0x40374f7d, inside the IRAM segment.  Resolving
+          # that PC needs a symbol source, and the firmware branch only
+          # publishes on the success path: on failure only nuttx.bin reached
+          # this branch.  Ship the symbol material too -- the ELF is the
+          # exact addr2line target, System.map is the 254 KB first resort,
+          # nuttx.map (~10 MB) is the full symbol+section view, segcount.txt
+          # carries the gate's own verdict for this very image.
+          cp "${{ github.workspace }}/openvela/firmware/nuttx" . 2>/dev/null || true
+          cp "${{ github.workspace }}/openvela/firmware/System.map" . 2>/dev/null || true
+          cp "${{ github.workspace }}/openvela/firmware/nuttx.map" . 2>/dev/null || true
+          cp "${{ github.workspace }}/openvela/firmware/nuttx.bin.sha256" . 2>/dev/null || true
+          cp "${{ github.workspace }}/openvela/firmware/segcount.txt" . 2>/dev/null || true
+          # The map name is NOT guaranteed (Collect copies every *.map the
+          # link emitted -- User.map on protected builds, none otherwise).
+          # nullglob keeps the loop a no-op instead of a literal-glob copy.
+          shopt -s nullglob
+          for m in "${{ github.workspace }}/openvela/firmware/"*.map; do
+            cp -v "$m" . || true
+          done
+          shopt -u nullglob
+          # Loud listing: a silent `|| true` above cost us run#65's bsp.log
+          # for months -- show exactly which forensics files made it.
+          echo "== logs branch forensics files =="
+          ls -la nuttx.bin nuttx System.map nuttx.map segcount.txt 2>/dev/null || true
           git add -A
           git commit -q -m "build log run #${{ github.run_number }}"
           git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
