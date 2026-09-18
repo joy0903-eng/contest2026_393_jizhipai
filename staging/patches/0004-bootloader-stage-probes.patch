@@ -1,0 +1,290 @@
+Wrap every bootloader_init() sub-stage with [HB] probes to find the dying one
+
+arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c (new)
+arch/xtensa/src/esp32s3/hal.mk
+boards/xtensa/esp32s3/common/scripts/esp32s3_sections.ld
+
+WHY
+---
+run#76 (fixed heartbeat probes) on real hardware: the console shows
+"entry ..." then "[HB] @A vecbase set", then silence until the TG0WDT
+reset loop.  The upstream "*** Booting NuttX ***" banner (printed by the
+existing __wrap_bootloader_print_banner, which sits between
+bootloader_console_init() and cache_hal_init() INSIDE bootloader_init())
+never appears, so the first exception fires in stages 1-7 of
+bootloader_init() (see esp-hal-3rdparty bootloader_esp32s3.c:167-251).
+
+This patch gives each cross-object sub-stage of bootloader_init() an
+entry/exit marker via -Wl,--wrap:
+
+  [HB] >N entering stage N      [HB] <N stage N returned
+
+Stage ids: 1=ana_super_wdt 2=ana_bod 3=ana_glitch 4=init_mem
+5=clear_bss 6=clock_configure 7=console_init 8=banner(upstream)
+9=cache_hal A=mmu_hal B=flash_update_id C=xmc D=read_header
+E=check_validity F=init_spi_flash G=config_wdt H=enable_random.
+
+The wrapper object is captured into .iram0.text (code AND .literal) by
+esp32s3_sections.ld exactly like the other bootloader objects, and the
+markers are built on the stack from character constants (no .rodata /
+DROM access), so they survive mmu_hal_unmap_all().
+
+Debug-only change; to be reverted once the failing stage is fixed.
+
+diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
+--- /dev/null
++++ b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
+@@ -0,0 +1,213 @@
++/****************************************************************************
++ * arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
++ *
++ * Debug-only boot-stage heartbeat probes (SIMPLE_BOOT).
++ *
++ * On real hardware the SIMPLE_BOOT startup dies inside bootloader_init()
++ * before its banner is printed (run#76: the [HB] @A vecbase-set marker is
++ * the last visible output, then silence, then the TG0WDT reset loop).  This
++ * file wraps every cross-object sub-stage of bootloader_init() via
++ * -Wl,--wrap (see hal.mk): each wrapper prints an [HB] entry marker
++ * (>N) before calling the real function and an [HB] exit marker (<N)
++ * after it returns (N = stage id below).  The last marker visible on
++ * the console names the failing stage.
++ *
++ * STAGE LIST
++ *   1 bootloader_ana_super_wdt_reset_config    9 cache_hal_init
++ *   2 bootloader_ana_bod_reset_config          A mmu_hal_init
++ *   3 bootloader_ana_clock_glitch_reset_config B bootloader_flash_update_id
++ *   4 bootloader_init_mem                      C bootloader_flash_xmc_startup
++ *   5 bootloader_clear_bss_section             D bootloader_read_bootloader_header
++ *   6 bootloader_clock_configure               E bootloader_check_bootloader_validity
++ *   7 bootloader_console_init                  F bootloader_init_spi_flash
++ *   (8 = upstream Booting-NuttX banner)        G bootloader_config_wdt
++ *                                              H bootloader_enable_random
++ *
++ * The whole object is captured into .iram0.text (IRAM, including its
++ * .literal pool) by esp32s3_sections.ld, mirroring the other bootloader
++ * objects, so the markers survive mmu_hal_unmap_all().  No string
++ * literals are used: the marker buffer is built on the stack from
++ * character constants because .rodata lives in DROM.
++ *
++ ****************************************************************************/
++
++#include <stdbool.h>
++
++/* ets_printf is a ROM function: always mapped and reaching the console
++ * through the same channel the ROM reset banner uses.
++ */
++
++extern int ets_printf(const char *fmt, ...);
++
++/* Real implementations live in the esp-hal-3rdparty bootloader objects;
++ * the linker resolves __real_* when the matching --wrap flag is active.
++ * esp_err_t is int (matching IDF), spelled plain here on purpose so this
++ * file needs no esp-hal headers.
++ */
++
++extern void __real_bootloader_ana_super_wdt_reset_config(bool enable);
++extern void __real_bootloader_ana_bod_reset_config(bool enable);
++extern void __real_bootloader_ana_clock_glitch_reset_config(bool enable);
++extern void __real_bootloader_init_mem(void);
++extern void __real_bootloader_clear_bss_section(void);
++extern void __real_bootloader_clock_configure(void);
++extern void __real_bootloader_console_init(void);
++extern void __real_cache_hal_init(void);
++extern void __real_mmu_hal_init(void);
++extern void __real_bootloader_flash_update_id(void);
++extern int  __real_bootloader_flash_xmc_startup(void);
++extern int  __real_bootloader_read_bootloader_header(void);
++extern int  __real_bootloader_check_bootloader_validity(void);
++extern int  __real_bootloader_init_spi_flash(void);
++extern void __real_bootloader_config_wdt(void);
++extern void __real_bootloader_enable_random(void);
++
++/* Build the [HB] marker (dir + stage + newline) on the stack (DRAM):
++ * no .rodata / DROM access anywhere in this file.
++ */
++
++static void hb_mark(char stage, char dir)
++{
++  char buf[10];
++
++  buf[0] = '[';
++  buf[1] = 'H';
++  buf[2] = 'B';
++  buf[3] = ']';
++  buf[4] = ' ';
++  buf[5] = dir;
++  buf[6] = stage;
++  buf[7] = '\n';
++  buf[8] = '\0';
++  ets_printf(buf);
++}
++
++/* Stages 1-7: run before the banner.  This is the window where the
++ * first exception is currently known to fire. */
++
++void __wrap_bootloader_ana_super_wdt_reset_config(bool enable)
++{
++  hb_mark('1', '>');
++  __real_bootloader_ana_super_wdt_reset_config(enable);
++  hb_mark('1', '<');
++}
++
++void __wrap_bootloader_ana_bod_reset_config(bool enable)
++{
++  hb_mark('2', '>');
++  __real_bootloader_ana_bod_reset_config(enable);
++  hb_mark('2', '<');
++}
++
++void __wrap_bootloader_ana_clock_glitch_reset_config(bool enable)
++{
++  hb_mark('3', '>');
++  __real_bootloader_ana_clock_glitch_reset_config(enable);
++  hb_mark('3', '<');
++}
++
++void __wrap_bootloader_init_mem(void)
++{
++  hb_mark('4', '>');
++  __real_bootloader_init_mem();
++  hb_mark('4', '<');
++}
++
++void __wrap_bootloader_clear_bss_section(void)
++{
++  hb_mark('5', '>');
++  __real_bootloader_clear_bss_section();
++  hb_mark('5', '<');
++}
++
++void __wrap_bootloader_clock_configure(void)
++{
++  hb_mark('6', '>');
++  __real_bootloader_clock_configure();
++  hb_mark('6', '<');
++}
++
++void __wrap_bootloader_console_init(void)
++{
++  hb_mark('7', '>');
++  __real_bootloader_console_init();
++  hb_mark('7', '<');
++}
++
++/* Stage 8 (banner) is already wrapped upstream (Booting-NuttX banner).
++ * Stages 9-H run after cache/mmu init. */
++
++void __wrap_cache_hal_init(void)
++{
++  hb_mark('9', '>');
++  __real_cache_hal_init();
++  hb_mark('9', '<');
++}
++
++void __wrap_mmu_hal_init(void)
++{
++  hb_mark('A', '>');
++  __real_mmu_hal_init();
++  hb_mark('A', '<');
++}
++
++void __wrap_bootloader_flash_update_id(void)
++{
++  hb_mark('B', '>');
++  __real_bootloader_flash_update_id();
++  hb_mark('B', '<');
++}
++
++int __wrap_bootloader_flash_xmc_startup(void)
++{
++  int ret;
++
++  hb_mark('C', '>');
++  ret = __real_bootloader_flash_xmc_startup();
++  hb_mark('C', '<');
++  return ret;
++}
++
++int __wrap_bootloader_read_bootloader_header(void)
++{
++  int ret;
++
++  hb_mark('D', '>');
++  ret = __real_bootloader_read_bootloader_header();
++  hb_mark('D', '<');
++  return ret;
++}
++
++int __wrap_bootloader_check_bootloader_validity(void)
++{
++  int ret;
++
++  hb_mark('E', '>');
++  ret = __real_bootloader_check_bootloader_validity();
++  hb_mark('E', '<');
++  return ret;
++}
++
++int __wrap_bootloader_init_spi_flash(void)
++{
++  int ret;
++
++  hb_mark('F', '>');
++  ret = __real_bootloader_init_spi_flash();
++  hb_mark('F', '<');
++  return ret;
++}
++
++void __wrap_bootloader_config_wdt(void)
++{
++  hb_mark('G', '>');
++  __real_bootloader_config_wdt();
++  hb_mark('G', '<');
++}
++
++void __wrap_bootloader_enable_random(void)
++{
++  hb_mark('H', '>');
++  __real_bootloader_enable_random();
++  hb_mark('H', '<');
++}
+diff --git a/arch/xtensa/src/esp32s3/hal.mk b/arch/xtensa/src/esp32s3/hal.mk
+--- a/arch/xtensa/src/esp32s3/hal.mk
++++ b/arch/xtensa/src/esp32s3/hal.mk
+@@ -157,6 +157,25 @@
+ 
+   CHIP_ASRCS += chip$(DELIM)$(ESP_HAL_3RDPARTY_REPO)$(DELIM)components$(DELIM)esp_rom$(DELIM)patches$(DELIM)esp_rom_cache_writeback_esp32s3.S
+ 
++  CHIP_CSRCS += esp32s3_boot_hb_wrap.c
++
++  # Debug-only boot-stage heartbeat probes (0004-bootloader-stage-probes).
++  LDFLAGS += --wrap=bootloader_ana_super_wdt_reset_config
++  LDFLAGS += --wrap=bootloader_ana_bod_reset_config
++  LDFLAGS += --wrap=bootloader_ana_clock_glitch_reset_config
++  LDFLAGS += --wrap=bootloader_init_mem
++  LDFLAGS += --wrap=bootloader_clear_bss_section
++  LDFLAGS += --wrap=bootloader_clock_configure
++  LDFLAGS += --wrap=bootloader_console_init
++  LDFLAGS += --wrap=cache_hal_init
++  LDFLAGS += --wrap=mmu_hal_init
++  LDFLAGS += --wrap=bootloader_flash_update_id
++  LDFLAGS += --wrap=bootloader_flash_xmc_startup
++  LDFLAGS += --wrap=bootloader_read_bootloader_header
++  LDFLAGS += --wrap=bootloader_check_bootloader_validity
++  LDFLAGS += --wrap=bootloader_init_spi_flash
++  LDFLAGS += --wrap=bootloader_config_wdt
++  LDFLAGS += --wrap=bootloader_enable_random
+   LDFLAGS += --wrap=bootloader_print_banner
+ endif
+ 
+diff --git a/boards/xtensa/esp32s3/common/scripts/esp32s3_sections.ld b/boards/xtensa/esp32s3/common/scripts/esp32s3_sections.ld
+--- a/boards/xtensa/esp32s3/common/scripts/esp32s3_sections.ld
++++ b/boards/xtensa/esp32s3/common/scripts/esp32s3_sections.ld
+@@ -197,6 +197,7 @@
+     *libarch.a:*uart_hal_iram.*(.text .text.* .literal .literal.*)
+     *libarch.a:*wdt_hal_iram.*(.text .text.* .literal .literal.*)
+     *libarch.a:*bootloader_banner_wrap.*(.text .text.* .literal .literal.*)
++    *libarch.a:*esp32s3_boot_hb_wrap.*(.text .text.* .literal .literal.*)
+     *libarch.a:*bootloader_init.*(.text .text.* .literal .literal.*)
+     *libarch.a:*bootloader_common.*(.text .text.* .literal .literal.*)
+     *libarch.a:*bootloader_common_loader.*(.text .text.* .literal .literal.*)
