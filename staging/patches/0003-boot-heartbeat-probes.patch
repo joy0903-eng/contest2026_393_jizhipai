@@ -1,0 +1,70 @@
+Add boot heartbeat probes to __start to locate the first exception
+
+arch/xtensa/src/esp32s3/esp32s3_start.c
+
+WHY
+---
+Real hardware (run#70/#72 images, zero-address padding relocated):
+the ROM loads all 6 segments, jumps to __start at 0x40374dbc, and the
+board then shows NOTHING but the ROM reset banner, rebooting forever
+on TG0WDT_SYS_RST every ~8 s.  Local objdump forensics on the run#72
+IRAM section mapped every captured Saved PC onto exception-handling
+code (_xtensa_context_save / _double_exception_vector): a first
+exception fires somewhere inside the SIMPLE_BOOT startup sequence,
+its C handler lives in IROM whose XIP mapping is not established
+yet, the fetch fails and the machine escalates to a DoubleException
+spin loop until the TG0 watchdog resets it.
+
+map_rom_segments() prints per-segment ets_printf lines ("imap/dmap:
+lma ...") and NONE of them ever reach the console, so the first
+exception fires before that call -- i.e. inside bootloader_init().
+This patch brackets every stage of the startup sequence with ROM
+ets_printf markers (the same channel the ROM reset banner uses, so
+they reach the USB-Serial/JTAG console):
+
+  [HB] @A vecbase set            -- before bootloader_init()
+  [HB] @B bootloader_init done   -- bootloader_init() returned 0
+  [HB] @C map_rom_segments done  -- XIP mapping done
+  [HB] @D caches done            -- configure_cpu_caches() done
+  [HB] @E __esp32s3_start        -- entered the C start function
+
+The last marker printed before the silence names the failing stage.
+Debug-only change; to be reverted once the first exception is
+located.
+
+diff --git a/arch/xtensa/src/esp32s3/esp32s3_start.c b/arch/xtensa/src/esp32s3/esp32s3_start.c
+@@ -298,6 +298,7 @@
+ noinstrument_function void noreturn_function IRAM_ATTR __esp32s3_start(void)
+ {
+   uint32_t sp;
++  ets_printf("[HB] @E __esp32s3_start\n");
+ 
+   /* Make sure that normal interrupts are disabled.  This is really only an
+    * issue when we are started in un-usual ways (such as from IRAM).  In this
+@@ -474,11 +475,13 @@
+   __asm__ __volatile__ ("wsr %0, vecbase\n"::"r" (_init_start));
+ 
+   if (bootloader_init() != 0)
++  ets_printf("[HB] @A vecbase set\n");
+     {
+       ets_printf("Hardware init failed, aborting\n");
+       while (true);
+     }
+ #  endif
++  ets_printf("[HB] @B bootloader_init done\n");
+ 
+   if (map_rom_segments(app_drom_start, app_drom_vaddr, app_drom_size,
+                        app_irom_start, app_irom_vaddr, app_irom_size) != 0)
+@@ -487,10 +490,12 @@
+       while (true);
+     }
+ #endif
++  ets_printf("[HB] @C map_rom_segments done\n");
+ 
+   configure_cpu_caches();
+ 
+   __esp32s3_start();
++  ets_printf("[HB] @D caches done\n");
+ 
+   while (true); /* Should not return */
+ }
