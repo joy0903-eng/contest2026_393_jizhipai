@@ -41,11 +41,12 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_start.c b/arch/xtensa/src/esp32s3/e
  
    /* Make sure that normal interrupts are disabled.  This is really only an
     * issue when we are started in un-usual ways (such as from IRAM).  In this
-@@ -474,11 +475,13 @@
+@@ -473,12 +474,14 @@
+ #  ifdef CONFIG_ESPRESSIF_SIMPLE_BOOT
    __asm__ __volatile__ ("wsr %0, vecbase\n"::"r" (_init_start));
  
-   if (bootloader_init() != 0)
 +  ets_printf("[HB] @A vecbase set\n");
+   if (bootloader_init() != 0)
      {
        ets_printf("Hardware init failed, aborting\n");
        while (true);
@@ -55,7 +56,7 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_start.c b/arch/xtensa/src/esp32s3/e
  
    if (map_rom_segments(app_drom_start, app_drom_vaddr, app_drom_size,
                         app_irom_start, app_irom_vaddr, app_irom_size) != 0)
-@@ -487,10 +490,12 @@
+@@ -487,9 +490,11 @@
        while (true);
      }
  #endif
@@ -63,8 +64,7 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_start.c b/arch/xtensa/src/esp32s3/e
  
    configure_cpu_caches();
  
-   __esp32s3_start();
 +  ets_printf("[HB] @D caches done\n");
+   __esp32s3_start();
  
    while (true); /* Should not return */
- }
