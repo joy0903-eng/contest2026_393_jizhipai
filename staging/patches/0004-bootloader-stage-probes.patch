@@ -1,4 +1,4 @@
-Wrap bootloader_init() sub-stages + SOURCE-LEVEL exception capture hooks (v10)
+Wrap bootloader_init() sub-stages + SOURCE-LEVEL exception capture hooks (v11)
 
 arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c (new, rewritten)
 arch/xtensa/src/esp32s3/hal.mk
@@ -16,26 +16,31 @@ never written, the >0 marker gone), i.e. that store faults outright
 while the slot stores are silently dropped.  Conclusion: no runtime
 writes to the vector region at all.
 
-v9 (run86, capture rate 35/35) proved the source-level hooks work:
+v9 (run86, 35/35) + v10 (run87, 35/35) forensics:
 first exception = slot 14 (user vector), cause 0 (Illegal), EPC1 =
-bootloader_init+0 -- the first `entry a1, 32` of bootloader_init --
-while flash/ELF hold the exact legal bytes there (esptool readback is
-byte-identical) and PS.WOE=1.  Same death at 40 MHz and 80 MHz header
-config; ROM SHA mismatch is present since run85 and deterministic.
+bootloader_init+0 (first `entry a1, 32`).  v10's [HB] IRAM line proved
+the CPU actually FETCHES ALL ZEROS at EPC1 (28 bytes), while flash
+readback and ELF hold the exact legal bytes there and the stub/dump/
+start code lower in the SAME segment demonstrably runs -- the ROM
+loaded the segment only partially.  Death is byte-identical at 40 and
+80 MHz header configs; esptool readback is 100%% clean; ROM SHA
+mismatch is deterministic and predates v9.
 
-v10 changes (answer: what does the CPU actually FETCH at EPC1?):
-- esp32s3_boot_hb_wrap.c: hb_exc_area grows to 19 words; the stub's
-  asm common body reads 7 words (28 bytes) directly from EPC1 into
-  area[12..18] before spinning (no function call, no window use); the
-  next boot hb_dump_prev prints them as a [HB] IRAM line.
-- Vector hooks unchanged from v9.
+v11 changes (draw the loaded-vs-zero map of the IRAM segment):
+- esp32s3_boot_hb_wrap.c: hb_exc_area grows to 29 words; the asm stub
+  additionally reads one word at EPC1-0x7000/-0x5800/-0x4000/-0x2800/
+  -0x1000/-0x800/-0x400/+0x400/+0x1000/+0x2000 into area[19..28]
+  (addmi-based, no literals); the next boot hb_dump_prev prints them
+  as a [HB] MAP line -- the address where the segment turns to zeros
+  is the boundary clue.
+- Vector hooks unchanged from v9/v10.
 
 Debug-only change; probes to be reverted once boot is verified.
 
 diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
 --- /dev/null
 +++ b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
-@@ -0,0 +1,548 @@
+@@ -0,0 +1,593 @@
 +/****************************************************************************
 + * arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
 + *
@@ -291,11 +296,13 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 + * runs because we die before it, so values persist across boots. */
 +
 +/* [0..11] as before.  v10 adds [12..18]: seven words read straight out
-+ * of IRAM at EPC1 by the stub before spinning -- what the CPU actually
-+ * fetched at the faulting instruction (run86: entry@bootloader_init
-+ * raised Illegal although flash/ELF hold a legal entry there). */
++ * of IRAM at EPC1 by the stub before spinning -- run87 proved they are
++ * ALL ZERO while flash/ELF hold a legal entry there, and while the
++ * stub/dump/start code lower in the same segment demonstrably runs.
++ * v11 adds [19..28]: ten one-word samples at EPC1-0x7000 .. EPC1+0x2000
++ * (the [HB] MAP line) -- where does the loaded segment turn to zeros? */
 +
-+uint32_t hb_exc_area[19];
++uint32_t hb_exc_area[29];
 +
 +/* Arm-time audit, written every boot by hb_arm_exc_probe and dumped
 + * before the capture record: [0]=live vecbase (proves the CPU is on
@@ -391,6 +398,19 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +        }
 +      *p = '\0';
 +      ets_printf(buf);
++
++      /* v11: ten one-word samples across the IRAM segment,
++       * EPC1-0x7000 .. EPC1+0x2000 (area[19..28]). */
++      p = buf;
++      hb_put_tag(&p, 'M', 'A', 'P', ' ', ' ', ' ', ' ', ' ');
++      for (i = 19; i < 29; i++)
++        {
++          hb_fmt_hex(p, hb_exc_area[i]);
++          p += 8;
++          *p++ = (i == 28) ? '\n' : ' ';
++        }
++      *p = '\0';
++      ets_printf(buf);
 +    }
 +
 +  hb_exc_area[0] = 0;
@@ -454,6 +474,36 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +  "  s32i a2, a3, 68\n"
 +  "  l32i a2, a5, 24\n"
 +  "  s32i a2, a3, 72\n"
++  "  addmi a2, a5, -28672\n"
++  "  l32i a4, a2, 0\n"
++  "  s32i a4, a3, 76\n"
++  "  addmi a2, a5, -22528\n"
++  "  l32i a4, a2, 0\n"
++  "  s32i a4, a3, 80\n"
++  "  addmi a2, a5, -16384\n"
++  "  l32i a4, a2, 0\n"
++  "  s32i a4, a3, 84\n"
++  "  addmi a2, a5, -10240\n"
++  "  l32i a4, a2, 0\n"
++  "  s32i a4, a3, 88\n"
++  "  addmi a2, a5, -4096\n"
++  "  l32i a4, a2, 0\n"
++  "  s32i a4, a3, 92\n"
++  "  addmi a2, a5, -2048\n"
++  "  l32i a4, a2, 0\n"
++  "  s32i a4, a3, 96\n"
++  "  addmi a2, a5, -1024\n"
++  "  l32i a4, a2, 0\n"
++  "  s32i a4, a3, 100\n"
++  "  addmi a2, a5, 1024\n"
++  "  l32i a4, a2, 0\n"
++  "  s32i a4, a3, 104\n"
++  "  addmi a2, a5, 4096\n"
++  "  l32i a4, a2, 0\n"
++  "  s32i a4, a3, 108\n"
++  "  addmi a2, a5, 8192\n"
++  "  l32i a4, a2, 0\n"
++  "  s32i a4, a3, 112\n"
 +  "7: j 7b\n"
 +  "  .balign 4\n"
 +  "  .globl hb_exc_stub_000\n"
