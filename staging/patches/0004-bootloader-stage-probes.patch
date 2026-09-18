@@ -30,7 +30,7 @@ Debug-only change; to be reverted once the failing stage is fixed.
 diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
 --- /dev/null
 +++ b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
-@@ -0,0 +1,231 @@
+@@ -0,0 +1,207 @@
 +/****************************************************************************
 + * arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
 + *
@@ -84,9 +84,6 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 + */
 +
 +extern int  __real_bootloader_init(void);
-+extern void __real_bootloader_ana_super_wdt_reset_config(bool enable);
-+extern void __real_bootloader_ana_bod_reset_config(bool enable);
-+extern void __real_bootloader_ana_clock_glitch_reset_config(bool enable);
 +extern void __real_bootloader_init_mem(void);
 +extern void __real_bootloader_clear_bss_section(void);
 +extern void __real_bootloader_clock_configure(void);
@@ -133,27 +130,6 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +  ret = __real_bootloader_init();
 +  hb_mark('0', '<');
 +  return ret;
-+}
-+
-+HB_IRAM void __wrap_bootloader_ana_super_wdt_reset_config(bool enable)
-+{
-+  hb_mark('1', '>');
-+  __real_bootloader_ana_super_wdt_reset_config(enable);
-+  hb_mark('1', '<');
-+}
-+
-+HB_IRAM void __wrap_bootloader_ana_bod_reset_config(bool enable)
-+{
-+  hb_mark('2', '>');
-+  __real_bootloader_ana_bod_reset_config(enable);
-+  hb_mark('2', '<');
-+}
-+
-+HB_IRAM void __wrap_bootloader_ana_clock_glitch_reset_config(bool enable)
-+{
-+  hb_mark('3', '>');
-+  __real_bootloader_ana_clock_glitch_reset_config(enable);
-+  hb_mark('3', '<');
 +}
 +
 +HB_IRAM void __wrap_bootloader_init_mem(void)
@@ -265,7 +241,7 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 diff --git a/arch/xtensa/src/esp32s3/hal.mk b/arch/xtensa/src/esp32s3/hal.mk
 --- a/arch/xtensa/src/esp32s3/hal.mk
 +++ b/arch/xtensa/src/esp32s3/hal.mk
-@@ -157,6 +157,29 @@
+@@ -157,6 +157,26 @@
  
    CHIP_ASRCS += chip$(DELIM)$(ESP_HAL_3RDPARTY_REPO)$(DELIM)components$(DELIM)esp_rom$(DELIM)patches$(DELIM)esp_rom_cache_writeback_esp32s3.S
  
@@ -276,9 +252,6 @@ diff --git a/arch/xtensa/src/esp32s3/hal.mk b/arch/xtensa/src/esp32s3/hal.mk
 +  # .text section so the pool follows section-.iram1 wrappers into IRAM.
 +  CFLAGS += -mtext-section-literals
 +  LDFLAGS += --wrap=bootloader_init
-+  LDFLAGS += --wrap=bootloader_ana_super_wdt_reset_config
-+  LDFLAGS += --wrap=bootloader_ana_bod_reset_config
-+  LDFLAGS += --wrap=bootloader_ana_clock_glitch_reset_config
 +  LDFLAGS += --wrap=bootloader_init_mem
 +  LDFLAGS += --wrap=bootloader_clear_bss_section
 +  LDFLAGS += --wrap=bootloader_clock_configure
