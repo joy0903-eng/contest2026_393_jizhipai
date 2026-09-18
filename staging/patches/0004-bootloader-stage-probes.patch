@@ -1,31 +1,30 @@
-Wrap bootloader_init() plus every sub-stage with IRAM [HB] probes (v2)
+Wrap bootloader_init() sub-stages with IRAM [HB] probes + ROM stack switch (v5)
 
 arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c (new, rewritten)
 arch/xtensa/src/esp32s3/hal.mk
+arch/xtensa/src/esp32s3/esp32s3_start.c
 
-WHY v2
-------
-run#77 (v1 of this patch) relied on a new archive-name capture line in
-esp32s3_sections.ld; the CI tree's sections.ld differs from the reference
-blob, the hunk drifted, and all wrappers landed in IROM.  Disassembly of
-__start proves the flash I-cache/MMU mapping is not alive yet at
-bootloader_init() time, so the first call into an IROM wrapper faulted
-before printing anything (Saved PC oscillated between the user-exception
-vector and _xtensa_context_save).
+WHY v5 (root cause found)
+-------------------------
+Runs 76/78/79/80 all died at the same stack depth: __start + wrap0 +
+hb_mark need ~106 bytes below the ROM-provided stack pointer (>0 printed
+OK), and the very first deeper frame (real bootloader_init, ~S-128)
+faulted.  The SIMPLE_BOOT path in esp32s3_start.c never installs a real
+stack, and the ROM-provided one has only ~100 usable bytes.  The fault
+kicks off an exception storm (Saved PC observed inside
+_double_exception_vector and _xtensa_context_save) that the TG0WDT
+finally kills.
 
-v2 changes:
-- every wrapper and hb_mark carry section-.iram1 attributes; the platform
-  wildcard line *(.iram1 .iram1.*) collects them unconditionally, no
-  sections.ld edit needed (hunk removed);
-- hal.mk adds -mtext-section-literals so each l32r literal pool lives in
-  its own function .text section and follows it into .iram1;
-- new stage-0 wrapper around bootloader_init() itself; stage ids are now
-  0=bootloader_init 1=ana_super_wdt 2=ana_bod 3=ana_glitch 4=init_mem
-  5=clear_bss 6=clock_configure 7=console_init 8=banner(upstream)
-  9=cache_hal A=mmu_hal B=flash_update_id C=xmc D=read_header
-  E=check_validity F=init_spi_flash G=config_wdt H=enable_random.
+v5 changes:
+- esp32s3_start.c: switch a1 to g_idlestack (the IDLE task stack lives
+  in .noinit) right after wsr.vecbase, before bootloader_init().  This
+  is transparent to the generated code (locals are a1-relative; the
+  function never returns to the old frame).
+- boot-stage heartbeat probes kept (v2 mechanics): section-.iram1
+  wrappers + -mtext-section-literals, no sections.ld edit (run#77
+  lesson: CI tree sections.ld drifts, hunk placement unreliable).
 
-Debug-only change; to be reverted once the failing stage is fixed.
+Debug-only change; probes to be reverted once boot is verified.
 
 diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
 --- /dev/null
@@ -295,3 +294,33 @@ diff --git a/arch/xtensa/src/esp32s3/hal.mk b/arch/xtensa/src/esp32s3/hal.mk
    LDFLAGS += --wrap=bootloader_print_banner
  endif
  
+diff --git a/arch/xtensa/src/esp32s3/esp32s3_start.c b/arch/xtensa/src/esp32s3/esp32s3_start.c
+--- a/arch/xtensa/src/esp32s3/esp32s3_start.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_start.c
+@@ -473,6 +473,26 @@
+ #  ifdef CONFIG_ESPRESSIF_SIMPLE_BOOT
+   __asm__ __volatile__ ("wsr %0, vecbase\n"::"r" (_init_start));
+ 
++  /* v5 root-cause fix (runs 76/78/79/80): the ROM hands control to
++   * __start with a stack whose usable depth below the entry frame is
++   * only ~100 bytes.  bootloader_init() nests four more call frames and
++   * ets_printf() needs internal stack on top; the first write beyond the
++   * shallow region faults, the exception handling chain faults again
++   * (double exception), and the TG0WDT finally bites inside the storm.
++   *
++   * Switch to the IDLE task stack (g_idlestack, .noinit, 16-byte
++   * aligned) for the whole boot sequence.  This is transparent to the
++   * generated code: locals are addressed relative to a1, so they are
++   * simply re-homed on the new stack, and __start never returns to the
++   * old frame.  The real startup code installs its own task stacks
++   * later; the IDLE stack is re-initialized when the IDLE task starts. */
++  {
++    uint32_t sp_new = (uint32_t)g_idlestack +
++                      IDLETHREAD_STACKWORDS * sizeof(uint32_t) - 64;
++
++    __asm__ __volatile__ ("mov a1, %0\n" :: "r" (sp_new));
++  }
++
+   if (bootloader_init() != 0)
+     {
+       ets_printf("Hardware init failed, aborting\n");
