@@ -44,25 +44,19 @@ CONFIG_ESP32S3_FLASH_16M=y
 # Kconfig depends-on knocked out the hidden ESPRESSIF_SIMPLE_BOOT (default y),
 # so the board booted through a 2nd-stage IDF bootloader that rejected the
 # image on a chip-revision check.  The bisect is reverted here.
-CONFIG_ESP32S3_SPIRAM=y
-CONFIG_ESP32S3_SPIRAM_MODE_OCT=y
-# Enabling SPIRAM alone is not enough -- two more switches decide whether the
-# 8MB is USABLE at runtime:
-#   SPIRAM_BOOT_INIT   - initialise PSRAM during boot, so even early
-#                        allocations (before the app initialises it) can land
-#                        in external RAM.  Without it the app has to call the
-#                        init itself and every pre-init alloc misses PSRAM.
-#   SPIRAM_COMMON_HEAP - fold PSRAM into the single common kernel heap, which
-#                        is what makes it allocatable via plain kmm_malloc /
-#                        malloc.  In a flat build this is the default, but it
-#                        is pinned here so the intent survives default drift
-#                        and so LVGL's CLIB-malloc path (see the LVGL block
-#                        below) really reaches PSRAM.
-# NOTE: SPIRAM_SPEED_* is deliberately left at its default.  An earlier
-# run#51 attempt pinned 40M while chasing the black screen; the boot format
-# was the real culprit, so the speed is not to be hand-tuned here.
-CONFIG_ESP32S3_SPIRAM_BOOT_INIT=y
-CONFIG_ESP32S3_SPIRAM_COMMON_HEAP=y
+# --- SPIRAM: bisect OFF (run#71) ---------------------------------------------
+# After the zero-load-address padding fix, the image loads all 6 segments and
+# enters 0x40374e6c but spins silently in early IRAM init until TG0WDT resets
+# (Saved PC wanders around 0x40374xxx, no UART output).  That window is exactly
+# where octal PSRAM BOOT_INIT runs, so this bisect turns the whole SPIRAM block
+# off.  If the board then boots, PSRAM init is the culprit; if it still spins,
+# PSRAM is exonerated and the hunt moves to clock/cache config.
+# MODE_OCT / BOOT_INIT / COMMON_HEAP depend on SPIRAM and are dropped by
+# olddefconfig automatically -- they stay here (commented) for reference.
+# CONFIG_ESP32S3_SPIRAM is not set
+# CONFIG_ESP32S3_SPIRAM_MODE_OCT is not set
+# CONFIG_ESP32S3_SPIRAM_BOOT_INIT is not set
+# CONFIG_ESP32S3_SPIRAM_COMMON_HEAP is not set
 
 # --- Boot format: SIMPLE_BOOT (ROM loads NuttX directly) ----------------------
 # Deliberately NOTHING is set here.  arch/xtensa/src/esp32s3/Kconfig:
