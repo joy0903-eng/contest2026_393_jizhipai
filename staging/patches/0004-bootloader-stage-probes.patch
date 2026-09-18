@@ -29,7 +29,7 @@ Debug-only change; probes to be reverted once boot is verified.
 diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
 --- /dev/null
 +++ b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
-@@ -0,0 +1,329 @@
+@@ -0,0 +1,499 @@
 +/****************************************************************************
 + * arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
 + *
@@ -263,22 +263,28 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +  hb_mark('H', '<');
 +}
 +
-+/* ---- v6: primary-exception capture (run82 lesson) -------------------
-+ * Runs 76/78/79/80/82 all die after >0 with code placement, image
-+ * content, window depth and stack proven clean (flash == ELF verified
-+ * byte-exact on run82).  The only remaining unknown is the CAUSE of the
-+ * primary exception, which the storm (double exception -> panic) masks.
-+ * We rewrite the user-exception vector slot (vecbase+0x340) to jump into
-+ * a probe that stores EXCCAUSE/EXCVADDR/EPC1/EXCSAVE1 into DRAM and then
-+ * spins (no context save -> no storm).  TG0WDT resets ~8 s later; DRAM
-+ * survives a soft reset, so the next boot prints the captured cause
-+ * before re-arming.  Debug-only; reverted with the rest of 0004. */
++/* ---- v7: ALL-vector-slot capture (run83 lesson) ----------------------
++ * v6 hooked ONLY the user-exception slot (+0x340); run83 proved it never
++ * fires (35 boots, hb_exc_area stayed zero) -- so the primary exception
++ * goes through a WINDOW vector (+0x000..0x140), a level>=2 slot
++ * (+0x180..0x240), or the live vecbase is not our table at all.  v7
++ * rewrites ALL 15 vector slots to jump into per-slot stubs
++ * (movi a6,<id>; j common).  The common body stores an 8-word record
++ * into .bss hb_exc_area: slot-id, EXCCAUSE, EXCVADDR, EPC1, EXCSAVE1,
++ * PS, DEPC and -- decisive -- the VECBASE seen at exception time.  It
++ * then spins (no context save -> no storm); TG0WDT resets ~8 s later;
++ * DRAM survives the soft reset, so the next boot dumps the record
++ * before re-arming.  A guard (slot-id already nonzero -> just spin)
++ * keeps a nested double-strike from overwriting the primary capture.
++ * dump_prev prints an EXC-none line when the record is clean, proving
++ * the arm path ran.  Debug-only; reverted with the rest of 0004. */
 +
-+/* Storage for the captured registers (plain .bss/DRAM -- data only, and
-+ * TG0WDT soft resets preserve it; the bss-clearing init_mem stage never
-+ * runs because we die before it, so values persist across boot cycles). */
++/* Capture record: [0]=slot id (1..15), [1]=EXCCAUSE, [2]=EXCVADDR,
++ * [3]=EPC1, [4]=EXCSAVE1, [5]=PS, [6]=DEPC, [7]=vecbase at exception.
++ * Plain .bss/DRAM (data only); the bss-clearing init_mem stage never
++ * runs because we die before it, so values persist across boots. */
 +
-+uint32_t hb_exc_area[4];
++uint32_t hb_exc_area[8];
 +
 +HB_IRAM static void hb_fmt_hex(char *p, uint32_t v)
 +{
@@ -295,68 +301,232 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +
 +HB_IRAM void hb_dump_prev(void)
 +{
-+  char buf[48];
++  char buf[96];
 +  char *p = buf;
++  int i;
 +
-+  if (hb_exc_area[0] == 0 && hb_exc_area[2] == 0)
++  if (hb_exc_area[0] == 0)
 +    {
++      *p++ = '[';  *p++ = 'H';  *p++ = 'B';  *p++ = ']';  *p++ = ' ';
++      *p++ = 'E';  *p++ = 'X';  *p++ = 'C';  *p++ = ' ';
++      *p++ = 'n';  *p++ = 'o';  *p++ = 'n';  *p++ = 'e';
++      *p++ = '\n';
++      *p = '\0';
++      ets_printf(buf);
 +      return;
 +    }
 +
 +  *p++ = '[';  *p++ = 'H';  *p++ = 'B';  *p++ = ']';  *p++ = ' ';
 +  *p++ = 'E';  *p++ = 'X';  *p++ = 'C';  *p++ = ' ';
-+  hb_fmt_hex(p, hb_exc_area[0]);  p += 8;  *p++ = ' ';
-+  hb_fmt_hex(p, hb_exc_area[1]);  p += 8;  *p++ = ' ';
-+  hb_fmt_hex(p, hb_exc_area[2]);  p += 8;  *p++ = ' ';
-+  hb_fmt_hex(p, hb_exc_area[3]);  p += 8;
-+  *p++ = '\n';
++  for (i = 0; i < 8; i++)
++    {
++      hb_fmt_hex(p, hb_exc_area[i]);
++      p += 8;
++      *p++ = (i == 7) ? '\n' : ' ';
++    }
 +  *p = '\0';
 +  ets_printf(buf);
 +}
 +
-+/* Naked probe: capture the four exception registers, then spin.  Runs
-+ * with unknown stack/window state, so it must have NO prologue at all
-+ * (Xtensa GCC has no naked attribute) -- written as file-level asm in
-+ * .iram1, so the emitted code is exactly the instruction sequence below. */
++/* No naked attribute on Xtensa GCC -> file-level asm so the emitted code
++ * is exactly what is written (zero prologue; runs with unknown
++ * stack/window state).  One 6-byte stub per vector slot carries the
++ * slot id in a6; the common body does the capture.  The literal pool is
++ * .balign 4 (run83 asm lesson: l32r offsets must be 4-byte multiples
++ * relative to (PC+3)&~3).  The guard reads hb_exc_area[0] first and
++ * skips the store when a capture already happened (nested double
++ * exception must not erase the primary record). */
 +
-+void hb_exc_probe(void);
++void hb_exc_common(void);
 +
 +__asm__(
 +  ".pushsection .iram1, \"ax\", @progbits\n"
-+  "  .globl hb_exc_probe\n"
-+  "  .hidden hb_exc_probe\n"
-+  "hb_exc_probe:\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_common\n"
++  "  .hidden hb_exc_common\n"
++  "hb_exc_common:\n"
 +  "  j 8f\n"
 +  "  .balign 4\n"
 +  "9: .word hb_exc_area\n"
-+  "8: rsr.exccause a2\n"
-+  "  l32r a3, 9b\n"
-+  "  s32i a2, a3, 0\n"
-+  "  rsr.excvaddr a2\n"
++  "8: l32r a3, 9b\n"
++  "  l32i a2, a3, 0\n"
++  "  bnez a2, 7f\n"
++  "  rsr.exccause a2\n"
 +  "  s32i a2, a3, 4\n"
-+  "  rsr.epc1 a2\n"
++  "  rsr.excvaddr a2\n"
 +  "  s32i a2, a3, 8\n"
-+  "  rsr.excsave1 a2\n"
++  "  rsr.epc1 a2\n"
 +  "  s32i a2, a3, 12\n"
++  "  rsr.excsave1 a2\n"
++  "  s32i a2, a3, 16\n"
++  "  rsr.ps a2\n"
++  "  s32i a2, a3, 20\n"
++  "  rsr.depc a2\n"
++  "  s32i a2, a3, 24\n"
++  "  s32i a6, a3, 0\n"
++  "  rsr.vecbase a2\n"
++  "  s32i a2, a3, 28\n"
 +  "7: j 7b\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_stub_000\n"
++  "  .hidden hb_exc_stub_000\n"
++  "hb_exc_stub_000:\n"
++  "  movi.n a6, 1\n"
++  "  nop.n\n"
++  "  j hb_exc_common\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_stub_040\n"
++  "  .hidden hb_exc_stub_040\n"
++  "hb_exc_stub_040:\n"
++  "  movi.n a6, 2\n"
++  "  nop.n\n"
++  "  j hb_exc_common\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_stub_080\n"
++  "  .hidden hb_exc_stub_080\n"
++  "hb_exc_stub_080:\n"
++  "  movi.n a6, 3\n"
++  "  nop.n\n"
++  "  j hb_exc_common\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_stub_0c0\n"
++  "  .hidden hb_exc_stub_0c0\n"
++  "hb_exc_stub_0c0:\n"
++  "  movi.n a6, 4\n"
++  "  nop.n\n"
++  "  j hb_exc_common\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_stub_100\n"
++  "  .hidden hb_exc_stub_100\n"
++  "hb_exc_stub_100:\n"
++  "  movi.n a6, 5\n"
++  "  nop.n\n"
++  "  j hb_exc_common\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_stub_140\n"
++  "  .hidden hb_exc_stub_140\n"
++  "hb_exc_stub_140:\n"
++  "  movi.n a6, 6\n"
++  "  nop.n\n"
++  "  j hb_exc_common\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_stub_180\n"
++  "  .hidden hb_exc_stub_180\n"
++  "hb_exc_stub_180:\n"
++  "  movi.n a6, 7\n"
++  "  nop.n\n"
++  "  j hb_exc_common\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_stub_1c0\n"
++  "  .hidden hb_exc_stub_1c0\n"
++  "hb_exc_stub_1c0:\n"
++  "  movi.n a6, 8\n"
++  "  nop.n\n"
++  "  j hb_exc_common\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_stub_200\n"
++  "  .hidden hb_exc_stub_200\n"
++  "hb_exc_stub_200:\n"
++  "  movi.n a6, 9\n"
++  "  nop.n\n"
++  "  j hb_exc_common\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_stub_240\n"
++  "  .hidden hb_exc_stub_240\n"
++  "hb_exc_stub_240:\n"
++  "  movi.n a6, 10\n"
++  "  nop.n\n"
++  "  j hb_exc_common\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_stub_280\n"
++  "  .hidden hb_exc_stub_280\n"
++  "hb_exc_stub_280:\n"
++  "  movi.n a6, 11\n"
++  "  nop.n\n"
++  "  j hb_exc_common\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_stub_2c0\n"
++  "  .hidden hb_exc_stub_2c0\n"
++  "hb_exc_stub_2c0:\n"
++  "  movi.n a6, 12\n"
++  "  nop.n\n"
++  "  j hb_exc_common\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_stub_300\n"
++  "  .hidden hb_exc_stub_300\n"
++  "hb_exc_stub_300:\n"
++  "  movi.n a6, 13\n"
++  "  nop.n\n"
++  "  j hb_exc_common\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_stub_340\n"
++  "  .hidden hb_exc_stub_340\n"
++  "hb_exc_stub_340:\n"
++  "  movi.n a6, 14\n"
++  "  nop.n\n"
++  "  j hb_exc_common\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_stub_3c0\n"
++  "  .hidden hb_exc_stub_3c0\n"
++  "hb_exc_stub_3c0:\n"
++  "  movi.n a6, 15\n"
++  "  nop.n\n"
++  "  j hb_exc_common\n"
 +  ".popsection\n"
 +);
 +
-+/* Rewrite the user-exception slot to `j hb_exc_probe`.  The slot layout
-+ * was verified in the ELF: vecbase+0x340 = _user_exception_vector
-+ * (wsr.excsave1 a0; call0 _xtensa_user_handler).  IRAM is writable and
-+ * isync flushes the prefetch queue; no cache is involved. */
++/* Rewrite ALL 15 vector slots to `j <stub>`.  Slot layout measured on
++ * the run82 ELF: 6 window vectors (+0x000/040/080/0c0/100/140), levels
++ * 2-5 (+0x180/1c0/200/240), debug (+0x280), NMI (+0x2c0), kernel
++ * (+0x300), user (+0x340), double (+0x3c0).  IRAM is writable, isync
++ * flushes the prefetch queue.  Stub labels are .balign 4 so the J
++ * offsets stay 4-byte multiples. */
 +
 +HB_IRAM void hb_arm_exc_probe(void)
 +{
 +  extern uint8_t _init_start[];
++  extern void hb_exc_stub_000(void);
++  extern void hb_exc_stub_040(void);
++  extern void hb_exc_stub_080(void);
++  extern void hb_exc_stub_0c0(void);
++  extern void hb_exc_stub_100(void);
++  extern void hb_exc_stub_140(void);
++  extern void hb_exc_stub_180(void);
++  extern void hb_exc_stub_1c0(void);
++  extern void hb_exc_stub_200(void);
++  extern void hb_exc_stub_240(void);
++  extern void hb_exc_stub_280(void);
++  extern void hb_exc_stub_2c0(void);
++  extern void hb_exc_stub_300(void);
++  extern void hb_exc_stub_340(void);
++  extern void hb_exc_stub_3c0(void);
++  static void * const hb_exc_stubs[15] =
++    {
++      hb_exc_stub_000, hb_exc_stub_040, hb_exc_stub_080,
++      hb_exc_stub_0c0, hb_exc_stub_100, hb_exc_stub_140,
++      hb_exc_stub_180, hb_exc_stub_1c0, hb_exc_stub_200,
++      hb_exc_stub_240, hb_exc_stub_280, hb_exc_stub_2c0,
++      hb_exc_stub_300, hb_exc_stub_340, hb_exc_stub_3c0
++    };
++  static const uint16_t hb_exc_offs[15] =
++    {
++      0x000u, 0x040u, 0x080u, 0x0c0u, 0x100u, 0x140u, 0x180u, 0x1c0u,
++      0x200u, 0x240u, 0x280u, 0x2c0u, 0x300u, 0x340u, 0x3c0u
++    };
++  int i;
 +
-+  volatile uint32_t *slot = (volatile uint32_t *)((uint32_t)_init_start + 0x340);
-+  uint32_t pc = (uint32_t)slot;
-+  int32_t off = (int32_t)((uint8_t *)hb_exc_probe - (uint8_t *)pc - 4);
-+  uint32_t instr = (((uint32_t)off >> 2) & 0x3ffffu) << 6 | 0x06u;
++  for (i = 0; i < 15; i++)
++    {
++      volatile uint32_t *slot = (volatile uint32_t *)
++        ((uint32_t)_init_start + hb_exc_offs[i]);
++      uint32_t pc = (uint32_t)slot;
++      int32_t off = (int32_t)((uint8_t *)hb_exc_stubs[i]
++                              - (uint8_t *)pc - 4);
++      uint32_t instr = (((uint32_t)off >> 2) & 0x3ffffu) << 6 | 0x06u;
 +
-+  *slot = instr;
++      *slot = instr;
++    }
++
 +  __asm__ __volatile__ ("isync\n" ::: "memory");
 +}
 diff --git a/arch/xtensa/src/esp32s3/hal.mk b/arch/xtensa/src/esp32s3/hal.mk
