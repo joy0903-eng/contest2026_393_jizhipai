@@ -297,10 +297,11 @@ diff --git a/arch/xtensa/src/esp32s3/hal.mk b/arch/xtensa/src/esp32s3/hal.mk
 diff --git a/arch/xtensa/src/esp32s3/esp32s3_start.c b/arch/xtensa/src/esp32s3/esp32s3_start.c
 --- a/arch/xtensa/src/esp32s3/esp32s3_start.c
 +++ b/arch/xtensa/src/esp32s3/esp32s3_start.c
-@@ -473,6 +473,26 @@
- #  ifdef CONFIG_ESPRESSIF_SIMPLE_BOOT
+@@ -475,6 +475,27 @@
    __asm__ __volatile__ ("wsr %0, vecbase\n"::"r" (_init_start));
  
+   ets_printf("[HB] @A vecbase set\n");
++
 +  /* v5 root-cause fix (runs 76/78/79/80): the ROM hands control to
 +   * __start with a stack whose usable depth below the entry frame is
 +   * only ~100 bytes.  bootloader_init() nests four more call frames and
