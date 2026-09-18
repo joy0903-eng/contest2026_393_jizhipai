@@ -29,7 +29,7 @@ Debug-only change; probes to be reverted once boot is verified.
 diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
 --- /dev/null
 +++ b/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
-@@ -0,0 +1,499 @@
+@@ -0,0 +1,573 @@
 +/****************************************************************************
 + * arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c
 + *
@@ -284,7 +284,16 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 + * Plain .bss/DRAM (data only); the bss-clearing init_mem stage never
 + * runs because we die before it, so values persist across boots. */
 +
-+uint32_t hb_exc_area[8];
++uint32_t hb_exc_area[12];
++
++/* Arm-time audit, written every boot by hb_arm_exc_probe and dumped
++ * before the capture record: [0]=live vecbase, [1]=double-slot word
++ * AFTER the rewrite, [2]=user-slot word AFTER the rewrite, [3]=first
++ * word of _xtensa_panic AFTER the hook.  Run83/84 lesson: the slots
++ * never fired -- this line proves (a) which table the CPU is on and
++ * (b) whether our IRAM writes actually stick (PMS write-protect?). */
++
++uint32_t hb_arm_audit[4];
 +
 +HB_IRAM static void hb_fmt_hex(char *p, uint32_t v)
 +{
@@ -299,30 +308,54 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +    }
 +}
 +
++HB_IRAM static void hb_put_tag(char **pp, char c0, char c1, char c2,
++                               char c3, char c4, char c5, char c6,
++                               char c7)
++{
++  char *p = *pp;
++
++  *p++ = '[';  *p++ = 'H';  *p++ = 'B';  *p++ = ']';  *p++ = ' ';
++  *p++ = c0;   *p++ = c1;   *p++ = c2;   *p++ = c3;
++  *p++ = c4;   *p++ = c5;   *p++ = c6;   *p++ = c7;
++
++  *pp = p;
++}
++
 +HB_IRAM void hb_dump_prev(void)
 +{
-+  char buf[96];
++  char buf[136];
 +  char *p = buf;
 +  int i;
 +
++  /* audit line: always printed, proves the arm path ran every boot */
++  p = buf;
++  hb_put_tag(&p, 'A', 'R', 'M', ' ', ' ', ' ', ' ', ' ');
++  for (i = 0; i < 4; i++)
++    {
++      hb_fmt_hex(p, hb_arm_audit[i]);
++      p += 8;
++      *p++ = (i == 3) ? '\n' : ' ';
++    }
++  *p = '\0';
++  ets_printf(buf);
++
 +  if (hb_exc_area[0] == 0)
 +    {
-+      *p++ = '[';  *p++ = 'H';  *p++ = 'B';  *p++ = ']';  *p++ = ' ';
-+      *p++ = 'E';  *p++ = 'X';  *p++ = 'C';  *p++ = ' ';
-+      *p++ = 'n';  *p++ = 'o';  *p++ = 'n';  *p++ = 'e';
++      p = buf;
++      hb_put_tag(&p, 'E', 'X', 'C', ' ', 'n', 'o', 'n', 'e');
 +      *p++ = '\n';
 +      *p = '\0';
 +      ets_printf(buf);
 +      return;
 +    }
 +
-+  *p++ = '[';  *p++ = 'H';  *p++ = 'B';  *p++ = ']';  *p++ = ' ';
-+  *p++ = 'E';  *p++ = 'X';  *p++ = 'C';  *p++ = ' ';
-+  for (i = 0; i < 8; i++)
++  p = buf;
++  hb_put_tag(&p, 'E', 'X', 'C', ' ', ' ', ' ', ' ', ' ');
++  for (i = 0; i < 12; i++)
 +    {
 +      hb_fmt_hex(p, hb_exc_area[i]);
 +      p += 8;
-+      *p++ = (i == 7) ? '\n' : ' ';
++      *p++ = (i == 11) ? '\n' : ' ';
 +    }
 +  *p = '\0';
 +  ets_printf(buf);
@@ -349,8 +382,13 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +  "  .balign 4\n"
 +  "9: .word hb_exc_area\n"
 +  "8: l32r a3, 9b\n"
++  "  mov a4, a0\n"
++  "  mov a5, a2\n"
 +  "  l32i a2, a3, 0\n"
 +  "  bnez a2, 7f\n"
++  "  s32i a4, a3, 32\n"
++  "  s32i a1, a3, 36\n"
++  "  s32i a5, a3, 40\n"
 +  "  rsr.exccause a2\n"
 +  "  s32i a2, a3, 4\n"
 +  "  rsr.excvaddr a2\n"
@@ -472,6 +510,13 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +  "  movi.n a6, 15\n"
 +  "  nop.n\n"
 +  "  j hb_exc_common\n"
++  "  .balign 4\n"
++  "  .globl hb_exc_stub_panic\n"
++  "  .hidden hb_exc_stub_panic\n"
++  "hb_exc_stub_panic:\n"
++  "  movi.n a6, 16\n"
++  "  nop.n\n"
++  "  j hb_exc_common\n"
 +  ".popsection\n"
 +);
 +
@@ -513,21 +558,50 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_boot_hb_wrap.c b/arch/xtensa/src/es
 +      0x000u, 0x040u, 0x080u, 0x0c0u, 0x100u, 0x140u, 0x180u, 0x1c0u,
 +      0x200u, 0x240u, 0x280u, 0x2c0u, 0x300u, 0x340u, 0x3c0u
 +    };
++  extern void hb_exc_stub_panic(void);
++  extern void _xtensa_panic(void);
++  volatile uint32_t *slot;
++  volatile uint32_t *panicw;
++  uint32_t pc;
++  int32_t off;
++  uint32_t instr;
 +  int i;
 +
 +  for (i = 0; i < 15; i++)
 +    {
-+      volatile uint32_t *slot = (volatile uint32_t *)
++      slot = (volatile uint32_t *)
 +        ((uint32_t)_init_start + hb_exc_offs[i]);
-+      uint32_t pc = (uint32_t)slot;
-+      int32_t off = (int32_t)((uint8_t *)hb_exc_stubs[i]
-+                              - (uint8_t *)pc - 4);
-+      uint32_t instr = (((uint32_t)off >> 2) & 0x3ffffu) << 6 | 0x06u;
++      pc = (uint32_t)slot;
++      off = (int32_t)((uint8_t *)hb_exc_stubs[i]
++                      - (uint8_t *)pc - 4);
++      instr = (((uint32_t)off >> 2) & 0x3ffffu) << 6 | 0x06u;
 +
 +      *slot = instr;
 +    }
 +
++  /* v8: also hook the panic funnel.  Every storm path ends in
++   * _xtensa_panic (the double vector calls it with cause=2 in a2, the
++   * level-1 handlers call it too).  Overwrite its first word with a j
++   * to the panic stub (id 16); the common body then records a0 = the
++   * call site inside the handler, a1 = stack, a2 = cause. */
++
++  panicw = (volatile uint32_t *)(void *)_xtensa_panic;
++  pc = (uint32_t)panicw;
++  off = (int32_t)((uint8_t *)hb_exc_stub_panic - (uint8_t *)pc - 4);
++  instr = (((uint32_t)off >> 2) & 0x3ffffu) << 6 | 0x06u;
++  *panicw = instr;
++
 +  __asm__ __volatile__ ("isync\n" ::: "memory");
++
++  /* v8 audit: which table is live and did our writes actually stick? */
++
++  __asm__ __volatile__ ("rsr.vecbase %0\n" : "=r" (pc));
++  hb_arm_audit[0] = pc;
++  hb_arm_audit[1] = ((volatile uint32_t *)
++                     ((uint32_t)_init_start + 0x3c0))[0];
++  hb_arm_audit[2] = ((volatile uint32_t *)
++                     ((uint32_t)_init_start + 0x340))[0];
++  hb_arm_audit[3] = panicw[0];
 +}
 diff --git a/arch/xtensa/src/esp32s3/hal.mk b/arch/xtensa/src/esp32s3/hal.mk
 --- a/arch/xtensa/src/esp32s3/hal.mk
