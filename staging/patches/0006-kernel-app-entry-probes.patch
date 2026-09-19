@@ -1,0 +1,46 @@
+Add ROM-level heartbeat probes at the kernel->NuttX handoff and at the app
+entry, to pinpoint where the silent boot stops.
+
+The board boots the bootloader fine (markers @A..@E via ROM ets_printf reach
+the USB-Serial/JTAG console), then goes completely silent.  Two hypotheses:
+  (H1) the kernel hangs inside __esp32s3_start AFTER the @E marker (clock /
+       RTC / esp32s3_board_initialize) or inside nx_start() early; or
+  (H2) the kernel + app run, but NuttX's esp32s3 USBSERIAL *driver* TX is dead
+       while the ROM ets_printf channel works -> every syslog/printf is dropped.
+
+@F (just before nx_start) and @APP (first line of desktop_companion_main) are
+both ROM ets_printf, so they print even if H2 is true.  If @F prints but @APP
+does not -> kernel reached nx_start but the init task never started (H1b).  If
+@F prints and @APP prints but the app's own syslog(LOG_INFO) still does not ->
+H2 confirmed (NuttX USBSERIAL TX is the culprit).
+
+diff --git a/arch/xtensa/src/esp32s3/esp32s3_start.c b/arch/xtensa/src/esp32s3/esp32s3_start.c
+index 1111111..2222222 100644
+--- a/arch/xtensa/src/esp32s3/esp32s3_start.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_start.c
+@@ -437,6 +437,7 @@
+   /* Bring up NuttX */
+ 
++  ets_printf("[HB] @F nx_start entering\n");
+   nx_start();
+   for (; ; ); /* Should not return */
+diff --git a/apps/examples/desktop_companion/main.c b/apps/examples/desktop_companion/main.c
+index 3333333..4444444 100644
+--- a/apps/examples/desktop_companion/main.c
++++ b/apps/examples/desktop_companion/main.c
+@@ -65,6 +65,8 @@
+ #include "smart_home.h"
+ 
++extern int ets_printf(const char *fmt, ...);
++
+ /****************************************************************************
+  * Private Types
+  ****************************************************************************/
+@@ -617,6 +619,7 @@
+   (void)argc;
+   (void)argv;
+ 
++  ets_printf("[APP] desktop_companion_main entered\n");
+   syslog(LOG_INFO, "AI-VOX3 desktop_companion starting (voice loop)\n");
+ 
+   /* --- BSP bring-up -------------------------------------------------------
