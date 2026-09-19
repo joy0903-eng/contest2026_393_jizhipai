@@ -1,0 +1,74 @@
+Add ROM ets_printf heartbeat probes inside nx_start() and nx_bringup() to
+bisect the silent-boot stop (board reaches '[HB] @F nx_start entering' then
+goes completely silent -- no [APP] from desktop_companion_main, no syslog).
+
+See commit message / prior forensics: entrypoint name is correct
+(-Dmain=desktop_companion_main). Two remaining cause classes:
+  (H1) nx_start() hangs before init task spawn (up_initialize / group_setupidlefiles).
+  (H2) nx_bringup() task_spawn() fails (ret<=0) but DEBUGASSERT is a no-op in
+       release -> kernel silently idles with no app/NSH. @K prints the return.
+All markers use ROM ets_printf (independent of NuttX serial driver TX).
+Debug-only; revert once the stop is located.
+
+--- a/sched/init/nx_start.c
++++ b/sched/init/nx_start.c
+@@ -66,6 +66,8 @@
+ #include "instrument/instrument.h"
+ #include "tls/tls.h"
+ #include "wqueue/wqueue.h"
++/* DEBUG-ONLY: ROM heartbeat probes to bisect the silent-boot stop. */
++extern int ets_printf(const char *fmt, ...);
+ 
+ /****************************************************************************
+  * Public Data
+@@ -763,6 +765,7 @@
+   /* Boot up is complete */
+ 
+   g_nx_initstate = OSINIT_BOOT;
++  ets_printf("[HB] @G nx_start top\n");
+   sched_trace_begin();
+   sinfo("Entry\n");
+ 
+@@ -777,6 +780,7 @@
+   /* MCU-specific hardware is initialized */
+ 
+   hardware_initialize();
++  ets_printf("[HB] @H hardware_initialize done\n");
+ 
+   /* Setup for Multi-Tasking ************************************************/
+ 
+@@ -792,6 +796,7 @@
+    */
+ 
+   DEBUGVERIFY(group_setupidlefiles());
++  ets_printf("[HB] @I group_setupidlefiles done\n");
+ 
+ #ifdef CONFIG_SMP
+   for (i = 1; i < CONFIG_SMP_NCPUS; i++)
+@@ -824,6 +829,7 @@
+   /* Create initial tasks and bring-up the system */
+ 
+   nx_bringup();
++  ets_printf("[HB] @J nx_bringup done\n");
+ 
+   /* Enter to idleloop */
+ 
+--- a/sched/init/nx_bringup.c
++++ b/sched/init/nx_bringup.c
+@@ -44,6 +44,8 @@
+ #include <nuttx/userspace.h>
+ #include <nuttx/binfmt/binfmt.h>
+ #include <nuttx/lib/lib.h>
++/* DEBUG-ONLY: ROM heartbeat probes to bisect the silent-boot stop. */
++extern int ets_printf(const char *fmt, ...);
+ 
+ #ifdef CONFIG_LEGACY_PAGING
+ #  include "paging/paging.h"
+@@ -364,6 +366,7 @@
+   ret = task_spawn(CONFIG_INIT_ENTRYNAME,
+                    CONFIG_INIT_ENTRYPOINT,
+                    NULL, &attr, argv, NULL);
++  ets_printf("[HB] @K init task_spawn ret=%d\n", ret);
+ #  endif
+ #elif defined(CONFIG_INIT_FILE)
+ 
