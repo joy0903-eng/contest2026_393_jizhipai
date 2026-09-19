@@ -98,6 +98,16 @@ CONFIG_SMP_NCPUS=2
 # servo PWM (LEDC channel1/2 pins 43/44).
 CONFIG_ESP32S3_USBSERIAL=y
 CONFIG_UART0_SERIAL_CONSOLE=n
+# 2026-09-19 FIX: the board was silent after "*** Booting NuttX ***" because
+# the kernel had NO console channel.  CONFIG_ESP32S3_USBSERIAL only registers
+# /dev/console; the init task's stdin/stdout/stderr and syslog() still need:
+#   CONFIG_DEV_CONSOLE    -> group_setupstdio() opens /dev/console for fd 0..2,
+#                            so the app's printf("[ui] ...") actually emits.
+#   CONFIG_SYSLOG_CONSOLE -> routes syslog(LOG_*) to /dev/console, so the
+#                            app's syslog(LOG_INFO/ERR) boot lines appear.
+# Without these, a perfectly healthy boot produces ZERO bytes on the USB-CDC.
+CONFIG_DEV_CONSOLE=y
+CONFIG_SYSLOG_CONSOLE=y
 
 # --- LCD: ST7789 240x240 (FSPI) + LVGL --------------------------------------
 CONFIG_LCD=y
