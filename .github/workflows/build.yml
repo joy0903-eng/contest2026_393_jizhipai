@@ -292,16 +292,18 @@ jobs:
           fi
           echo "PATCH CHECK OK: --ram-only-header removed from tools/esp32s3/Config.mk"
           # 0005 verify gate: the IRAM-split region iram0_1_seg must be present
-          # in the VENDOR common ld scripts that the linker actually consumes
-          # (BOARD_COMMON_DIR -> vendor/espressif/.../common).  If it is missing
-          # here, the DCache-hole fix did not reach the link and the boot hang
-          # would remain (this is exactly what slipped through in run#89).
-          if grep -q 'iram0_1_seg' \
+          # AND start at the corrected org 0x40380000 (not the bad 0x4037C000
+          # block) in the VENDOR common ld scripts that the linker actually
+          # consumes (BOARD_COMMON_DIR -> vendor/espressif/.../common).  If the
+          # corrected org is missing here, the cache-hole fix did not reach the
+          # link and the boot hang would remain (this is exactly what slipped
+          # through in run#89, and run#90 still placed IRAM at the bad 0x4037C000).
+          if grep -q 'iram0_1_seg (RX) :                 org = 0x40380000' \
                openvela/vendor/espressif/boards/esp32s3/common/scripts/flat_memory.ld; then
-            echo "PATCH VERIFY OK: IRAM split (iram0_1_seg) present in vendor common ld"
+            echo "PATCH VERIFY OK: IRAM split (iram0_1_seg @ 0x40380000) present in vendor common ld"
           else
-            echo "== PATCH VERIFY FAILED: iram0_1_seg missing from vendor common flat_memory.ld =="
-            echo "   (DCache-hole fix did NOT reach the linker -- do not flash this build)"
+            echo "== PATCH VERIFY FAILED: iram0_1_seg @ 0x40380000 missing from vendor common flat_memory.ld =="
+            echo "   (cache-hole fix did NOT reach the linker -- do not flash this build)"
             exit 1
           fi
           echo "== BSP SECTION 3/3: verify gates DONE =="

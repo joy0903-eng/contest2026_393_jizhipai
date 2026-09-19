@@ -1,27 +1,40 @@
-Split ESP32-S3 IRAM around the DCache hole to fix SIMPLE_BOOT boot hang
+Split ESP32-S3 IRAM around the cache-reserved hole to fix SIMPLE_BOOT boot hang
 
 boards/xtensa/esp32s3/common/scripts/flat_memory.ld
 boards/xtensa/esp32s3/common/scripts/esp32s3_sections.ld
 
 WHY
 ---
-The SIMPLE_BOOT image dies inside bootloader_init() (TG0WDT reset loop).
-Root cause: the ESP32-S3 DCache physically owns SRAM 0x40378000-0x4037C000
-(16 KB).  The ROM bootloader copies the IRAM segment from flash to IRAM
-through the 0x3C800000 cache window; writes that land in that 16 KB hole are
-silently swallowed by the cache controller, so bootloader_init() code is read
-back as all-zeros and the CPU IllegalInstruction-faults.  Forensics (run88 MAP
-probe) pinned the zero region exactly to dst [0x40378000,0x4037C000).
+The SIMPLE_BOOT image dies with IllegalInstruction at the entry point and a
+ROM "SHA-256 comparison failed" (the ROM computes the hash over the IRAM
+segment it actually placed in RAM, and that RAM differs from the file).
+
+Root cause (proven by a live RAM dump of run90 via esptool dump_mem):
+the ESP32-S3 reserves a block of IRAM for the cache controller.  Addresses
+in that block read back as all-zero after the ROM copies the IRAM segment,
+so the entry code is fetched as zeros -> IllegalInstruction.  The bad block
+is NOT 0x40378000-0x4037C000 (the earlier guess).  The live dump showed:
+
+  - vectors  @ 0x40374000 (len 0x400)  -> byte-identical to file   (GOOD)
+  - .iram0.text @ 0x4037c000 (len 0xb58c):
+        bytes 0x4037c000 .. 0x4037c910  -> ALL ZERO in live RAM    (BAD)
+        bytes 0x4037c910 .. 0x4038758c  -> identical to file       (GOOD)
+  - the entry point 0x4037c3fc lies INSIDE the zeroed block.
+
+So the cache-reserved block includes the 0x4037C000 region.  The fix is to
+place loaded IRAM entirely ABOVE it, at 0x40380000 (which the dump proved is
+clean: real code there matched the file exactly).
 
 FIX
 ---
-iram0_0_seg currently spans 0x40374000 -> SRAM_IRAM_END and straddles the hole.
-Split it into two hole-free regions:/n  iram0_0_seg : org = SRAM_IRAM_ORG (0x40374000), len = 0x4000  (vectors only)
-  iram0_1_seg : org = 0x4037C000,          len = SRAM_IRAM_END - 0x4037C000
+iram0_0_seg currently spans 0x40374000 -> SRAM_IRAM_END and straddles the
+cache-reserved block.  Split it into two hole-free regions:
+  iram0_0_seg : org = SRAM_IRAM_ORG (0x40374000), len = 0x4000  (vectors only)
+  iram0_1_seg : org = 0x40380000,          len = SRAM_IRAM_END - 0x40380000
 and route .iram0.text / .iram0.text_end / .iram0.data / .iram0.bss to
 iram0_1_seg.  .iram0.vectors stays in iram0_0_seg (region A) so vecbase and
-the reset vector table are untouched.  No loaded IRAM lands in the hole, so
-the ROM copy is no longer corrupted.
+the reset vector table are untouched.  No loaded IRAM lands in the bad block,
+so the ROM copy is no longer corrupted and the entry code is real.
 
 This is the real fix for the boot hang; the debug probes 0003/0004 can be
 reverted once a clean boot is confirmed.
@@ -75,14 +88,13 @@ index ee0e928..0e6e869 100644
    /* IRAM for CPU */
  
 -  iram0_0_seg (RX) :                 org = SRAM_IRAM_ORG, len = SRAM_IRAM_SIZE
-+  /* IRAM split around the ESP32-S3 DCache hole at 0x40378000-0x4037C000.
-+   * The cache controller owns that 16 KB; when the ROM bootloader copies the
-+   * IRAM segment through the 0x3C800000 cache window, writes landing there are
-+   * silently dropped, corrupting bootloader_init() and causing the TG0WDT reset
-+   * loop (SIMPLE_BOOT).  Route loaded IRAM to two hole-free regions instead.
++  /* IRAM split around the ESP32-S3 cache-reserved block at 0x4037C000.
++   * Live RAM forensics on run90 proved addresses 0x4037c000..0x4037c910 come
++   * back all-zero after the ROM copy (entry 0x4037c3fc is inside that block),
++   * while 0x40374000 (vectors) and 0x40380000+ are clean.  Route loaded IRAM
++   * to two hole-free regions, skipping the entire 0x4037C000-0x40380000 block.
 +   */
 +  iram0_0_seg (RX) :                 org = SRAM_IRAM_ORG, len = 0x4000
-+  iram0_1_seg (RX) :                 org = 0x4037C000, len = SRAM_IRAM_END - 0x4037C000
++  iram0_1_seg (RX) :                 org = 0x40380000, len = SRAM_IRAM_END - 0x40380000
  
    /* Flash mapped instruction data. */
- 
