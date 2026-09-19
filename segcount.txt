@@ -1,0 +1,45 @@
+esptool_rc=0
+irom=1
+drom=1
+validation_hash=1
+zeroaddr_rc=0
+segcount=7
+zero_load_addr_segments=0
+esptool.py v4.8.1
+File size: 808784 (bytes)
+Image version: 1
+Entry point: 403809e4
+7 segments
+
+Segment 1: len 0x0303c load 0x3fcb5f90 file_offs 0x00000018 [BYTE_ACCESSIBLE,MEM_INTERNAL,DRAM]
+Segment 2: len 0x00400 load 0x40374000 file_offs 0x0000305c [MEM_INTERNAL,IRAM]
+Segment 3: len 0x0b24c load 0x40380000 file_offs 0x00003464 [MEM_INTERNAL,IRAM]
+Segment 4: len 0x01938 load 0x3fc88000 file_offs 0x0000e6b8 [BYTE_ACCESSIBLE,MEM_INTERNAL,DRAM]
+Segment 5: len 0x1cd90 load 0x3c010000 file_offs 0x0000fff8 [DROM]
+Segment 6: len 0x03260 load 0x3fc89938 file_offs 0x0002cd90 [BYTE_ACCESSIBLE,MEM_INTERNAL,DRAM]
+Segment 7: len 0x95724 load 0x42040000 file_offs 0x0002fff8 [IROM]
+Checksum: 74 (valid)
+Validation Hash: 089caa324981200da30ee997cccedd2de9f0e95528249abbccae71296cadda97 (valid)
+== full ESP segment table ==
+------------------------------------------------------------------------------
+== ESP IMAGE SEGMENT TABLE: nuttx/nuttx.bin ==
+   file size    : 808784 bytes
+   magic        : 0xe9 (ok)
+   segcount     : 7
+   entry point  : 0x403809e4
+   first seg hdr: 0x18  (24-byte image header)
+   last byte of last segment data: 0xc5724
+
+   idx  load_addr    data_len   hdr_off    data_off   note
+   0    0x3fcb5f90   0x303c     0x18       0x20       -
+   1    0x40374000   0x400      0x305c     0x3064     -
+   2    0x40380000   0xb24c     0x3464     0x346c     -
+   3    0x3fc88000   0x1938     0xe6b8     0xe6c0     -
+   4    0x3c010000   0x1cd90    0xfff8     0x10000    -
+   5    0x3fc89938   0x3260     0x2cd90    0x2cd98    -
+   6    0x42040000   0x95724    0x2fff8    0x30000    -
+
+SEGCOUNT=7
+ZERO_LOAD_ADDR_SEGMENTS=0
+ZERO-ADDR GATE OK: segcount=7, zero-load-address segments=0, entry=0x403809e4
+------------------------------------------------------------------------------

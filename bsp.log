@@ -1,0 +1,68 @@
++ echo '== BSP SECTION 1/3: staging copies =='
+== BSP SECTION 1/3: staging copies ==
++ mkdir -p openvela/apps/examples
++ mkdir -p openvela/vendor/espressif/boards/esp32s3
++ '[' '!' -d openvela/apps/examples ']'
++ '[' '!' -d openvela/nuttx ']'
++ for src in team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3 team_repo/staging/apps/examples/desktop_companion team_repo/staging/vendor_espressif/boards/esp32s3/common
++ '[' '!' -e team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3 ']'
++ echo '  staging source OK: team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3'
+  staging source OK: team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3
++ for src in team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3 team_repo/staging/apps/examples/desktop_companion team_repo/staging/vendor_espressif/boards/esp32s3/common
++ '[' '!' -e team_repo/staging/apps/examples/desktop_companion ']'
++ echo '  staging source OK: team_repo/staging/apps/examples/desktop_companion'
+  staging source OK: team_repo/staging/apps/examples/desktop_companion
++ for src in team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3 team_repo/staging/apps/examples/desktop_companion team_repo/staging/vendor_espressif/boards/esp32s3/common
++ '[' '!' -e team_repo/staging/vendor_espressif/boards/esp32s3/common ']'
++ echo '  staging source OK: team_repo/staging/vendor_espressif/boards/esp32s3/common'
+  staging source OK: team_repo/staging/vendor_espressif/boards/esp32s3/common
++ echo '== BSP SECTION 1/3: staging copies =='
+== BSP SECTION 1/3: staging copies ==
++ set +x
+== BSP SECTION 1/3: staging copies DONE ==
+total 108
+drwxr-xr-x 2 runner runner  4096 Sep 19 08:45 .
+drwxr-xr-x 6 runner runner  4096 Sep 19 08:45 ..
+-rw-r--r-- 1 runner runner  1448 Sep 19 08:45 esp32s3_aliases.ld
+-rw-r--r-- 1 runner runner  2478 Sep 19 08:45 esp32s3_peripherals.ld
+-rw-r--r-- 1 runner runner  1904 Sep 19 08:45 esp32s3_rom_aliases.ld
+-rw-r--r-- 1 runner runner 23148 Sep 19 08:45 esp32s3_sections.ld
+-rw-r--r-- 1 runner runner  7773 Sep 19 08:45 flat_memory.ld
+-rw-r--r-- 1 runner runner  9724 Sep 19 08:45 kernel-space.ld
+-rw-r--r-- 1 runner runner 12270 Sep 19 08:45 legacy_sections.ld
+-rw-r--r-- 1 runner runner 14757 Sep 19 08:45 mcuboot_sections.ld
+-rw-r--r-- 1 runner runner  5013 Sep 19 08:45 protected_memory.ld
+-rw-r--r-- 1 runner runner  6951 Sep 19 08:45 user-space.ld
+== BSP SECTION 2/3: nuttx patch loop (PATCHDIR=/home/runner/work/contest2026_393_jizhipai/contest2026_393_jizhipai/team_repo/staging/patches) ==
+== NUTTX PATCH: 0001-esp_loader-map_rom_segments-override-irom-drom-size.patch ==
+patching file arch/xtensa/src/common/espressif/esp_loader.c
+applied: 0001-esp_loader-map_rom_segments-override-irom-drom-size.patch
+== NUTTX PATCH: 0002-esp32s3-Config.mk-drop-ram-only-header.patch ==
+patching file tools/esp32s3/Config.mk
+applied: 0002-esp32s3-Config.mk-drop-ram-only-header.patch
+== NUTTX PATCH: 0003-boot-heartbeat-probes.patch ==
+patching file arch/xtensa/src/esp32s3/esp32s3_start.c
+applied: 0003-boot-heartbeat-probes.patch
+== NUTTX PATCH: 0005-esp32s3-iram-split-dcache-hole.patch ==
+patching file boards/xtensa/esp32s3/common/scripts/esp32s3_sections.ld
+patching file boards/xtensa/esp32s3/common/scripts/flat_memory.ld
+applied: 0005-esp32s3-iram-split-dcache-hole.patch
+== NUTTX PATCH: 0006-kernel-app-entry-probes.patch ==
+patching file arch/xtensa/src/esp32s3/esp32s3_start.c
+Hunk #1 succeeded at 439 (offset 2 lines).
+applied: 0006-kernel-app-entry-probes.patch
+== NUTTX PATCH: 0007-nx_start-trace-probes.patch ==
+patching file sched/init/nx_start.c
+patching file sched/init/nx_bringup.c
+applied: 0007-nx_start-trace-probes.patch
+== BSP SECTION 2/3: patch loop DONE (failures=0) ==
+== LD RE-COPY: patched nuttx .ld scripts copied to vendor common ==
+== BSP SECTION 3/3: patch verify gates ==
+PATCH VERIFY OK: map_rom_segments size override is in the tree
+PATCH CHECK OK: --ram-only-header removed from tools/esp32s3/Config.mk
+PATCH VERIFY OK: IRAM split (iram0_1_seg @ 0x40380000) present in vendor common ld
+== BSP SECTION 3/3: verify gates DONE ==
+BSP+应用已就位
+--- apps/examples/Kconfig ---
+source "/home/runner/work/contest2026_393_jizhipai/contest2026_393_jizhipai/openvela/apps/examples/desktop_companion/Kconfig"
+== BSP DONE (all sections) ==
