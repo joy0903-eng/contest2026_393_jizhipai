@@ -1,0 +1,88 @@
+Split ESP32-S3 IRAM around the DCache hole to fix SIMPLE_BOOT boot hang
+
+boards/xtensa/esp32s3/common/scripts/flat_memory.ld
+boards/xtensa/esp32s3/common/scripts/esp32s3_sections.ld
+
+WHY
+---
+The SIMPLE_BOOT image dies inside bootloader_init() (TG0WDT reset loop).
+Root cause: the ESP32-S3 DCache physically owns SRAM 0x40378000-0x4037C000
+(16 KB).  The ROM bootloader copies the IRAM segment from flash to IRAM
+through the 0x3C800000 cache window; writes that land in that 16 KB hole are
+silently swallowed by the cache controller, so bootloader_init() code is read
+back as all-zeros and the CPU IllegalInstruction-faults.  Forensics (run88 MAP
+probe) pinned the zero region exactly to dst [0x40378000,0x4037C000).
+
+FIX
+---
+iram0_0_seg currently spans 0x40374000 -> SRAM_IRAM_END and straddles the hole.
+Split it into two hole-free regions:/n  iram0_0_seg : org = SRAM_IRAM_ORG (0x40374000), len = 0x4000  (vectors only)
+  iram0_1_seg : org = 0x4037C000,          len = SRAM_IRAM_END - 0x4037C000
+and route .iram0.text / .iram0.text_end / .iram0.data / .iram0.bss to
+iram0_1_seg.  .iram0.vectors stays in iram0_0_seg (region A) so vecbase and
+the reset vector table are untouched.  No loaded IRAM lands in the hole, so
+the ROM copy is no longer corrupted.
+
+This is the real fix for the boot hang; the debug probes 0003/0004 can be
+reverted once a clean boot is confirmed.
+
+diff --git a/boards/xtensa/esp32s3/common/scripts/esp32s3_sections.ld b/boards/xtensa/esp32s3/common/scripts/esp32s3_sections.ld
+index 305256c..13bd98b 100644
+--- a/boards/xtensa/esp32s3/common/scripts/esp32s3_sections.ld
++++ b/boards/xtensa/esp32s3/common/scripts/esp32s3_sections.ld
+@@ -251,7 +251,7 @@ SECTIONS
+     . = ALIGN(4) + 16;
+ 
+     _iram_text = ABSOLUTE(.);
+-  } >iram0_0_seg
++  } >iram0_1_seg
+ 
+     /* Marks the end of IRAM code segment */
+ 
+@@ -264,7 +264,7 @@ SECTIONS
+     . += 16;
+     . = ALIGN(256);
+     _iram_end = ABSOLUTE(.);
+-  } >iram0_0_seg
++  } >iram0_1_seg
+ 
+   .iram0.data :
+   {
+@@ -272,7 +272,7 @@ SECTIONS
+ 
+     *(.iram.data)
+     *(.iram.data.*)
+-  } >iram0_0_seg
++  } >iram0_1_seg
+ 
+   .iram0.bss (NOLOAD) :
+   {
+@@ -283,7 +283,7 @@ SECTIONS
+ 
+     . = ALIGN(4);
+     _iram_end = ABSOLUTE(.);
+-  } >iram0_0_seg
++  } >iram0_1_seg
+ 
+   .dram0.dummy (NOLOAD) :
+   {
+diff --git a/boards/xtensa/esp32s3/common/scripts/flat_memory.ld b/boards/xtensa/esp32s3/common/scripts/flat_memory.ld
+index ee0e928..0e6e869 100644
+--- a/boards/xtensa/esp32s3/common/scripts/flat_memory.ld
++++ b/boards/xtensa/esp32s3/common/scripts/flat_memory.ld
+@@ -118,7 +118,14 @@ MEMORY
+ 
+   /* IRAM for CPU */
+ 
+-  iram0_0_seg (RX) :                 org = SRAM_IRAM_ORG, len = SRAM_IRAM_SIZE
++  /* IRAM split around the ESP32-S3 DCache hole at 0x40378000-0x4037C000.
++   * The cache controller owns that 16 KB; when the ROM bootloader copies the
++   * IRAM segment through the 0x3C800000 cache window, writes landing there are
++   * silently dropped, corrupting bootloader_init() and causing the TG0WDT reset
++   * loop (SIMPLE_BOOT).  Route loaded IRAM to two hole-free regions instead.
++   */
++  iram0_0_seg (RX) :                 org = SRAM_IRAM_ORG, len = 0x4000
++  iram0_1_seg (RX) :                 org = 0x4037C000, len = SRAM_IRAM_END - 0x4037C000
+ 
+   /* Flash mapped instruction data. */
+ 
