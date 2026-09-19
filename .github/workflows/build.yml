@@ -243,6 +243,21 @@ jobs:
             echo "no staging/patches directory -- no nuttx patches to apply"
           fi
           echo "== BSP SECTION 2/3: patch loop DONE (failures=$patch_failures) =="
+          # CRITICAL (run#89 root cause): the ld scripts were copied from the
+          # synced nuttx tree into vendor/espressif/.../common/scripts in
+          # SECTION 1/3 -- BEFORE this patch loop ran.  The ai_vox3 board's
+          # BOARD_COMMON_DIR resolves to that vendor copy, so the linker was
+          # using the UNPATCHED scripts even though 0005 reported "applied" to
+          # the nuttx tree.  Re-copy the now-patched nuttx-tree ld scripts over
+          # the vendor copy so the link actually sees the IRAM split around the
+          # DCache hole.
+          if [ -d openvela/nuttx/boards/xtensa/esp32s3/common/scripts ] && \
+             [ -d openvela/vendor/espressif/boards/esp32s3/common/scripts ]; then
+            cp -f openvela/nuttx/boards/xtensa/esp32s3/common/scripts/*.ld \
+                  openvela/vendor/espressif/boards/esp32s3/common/scripts/ \
+              && echo "== LD RE-COPY: patched nuttx .ld scripts copied to vendor common ==" \
+              || { echo "== LD RE-COPY FAILED =="; exit 1; }
+          fi
           if [ "$patch_failures" != "0" ]; then
             echo "== BSP FATAL: $patch_failures patch(es) failed to apply -- refusing to build a half-patched tree =="
             exit 1
@@ -276,6 +291,19 @@ jobs:
             exit 1
           fi
           echo "PATCH CHECK OK: --ram-only-header removed from tools/esp32s3/Config.mk"
+          # 0005 verify gate: the IRAM-split region iram0_1_seg must be present
+          # in the VENDOR common ld scripts that the linker actually consumes
+          # (BOARD_COMMON_DIR -> vendor/espressif/.../common).  If it is missing
+          # here, the DCache-hole fix did not reach the link and the boot hang
+          # would remain (this is exactly what slipped through in run#89).
+          if grep -q 'iram0_1_seg' \
+               openvela/vendor/espressif/boards/esp32s3/common/scripts/flat_memory.ld; then
+            echo "PATCH VERIFY OK: IRAM split (iram0_1_seg) present in vendor common ld"
+          else
+            echo "== PATCH VERIFY FAILED: iram0_1_seg missing from vendor common flat_memory.ld =="
+            echo "   (DCache-hole fix did NOT reach the linker -- do not flash this build)"
+            exit 1
+          fi
           echo "== BSP SECTION 3/3: verify gates DONE =="
           echo "BSP+应用已就位"
           echo "--- apps/examples/Kconfig ---"
