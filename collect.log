@@ -1,0 +1,176 @@
+== Collect: cwd = /home/runner/work/contest2026_393_jizhipai/contest2026_393_jizhipai/openvela ==
+== Collect: staging dir ==
+total 8
+drwxr-xr-x  2 runner runner 4096 Sep 19 08:06 .
+drwxr-xr-x 15 runner runner 4096 Sep 19 08:06 ..
+== Collect: binlist ==
+-rw-r--r-- 1 runner runner 52 Sep 19 08:05 nuttx/libs/libc/fdt/dtc/tests/incbin.bin
+total 108
+drwxr-xr-x 2 runner runner  4096 Sep 19 08:05 .
+drwxr-xr-x 6 runner runner  4096 Sep 19 08:05 ..
+-rw-r--r-- 1 runner runner   798 Sep 19 08:05 assign.pass.cpp
+-rw-r--r-- 1 runner runner   757 Sep 19 08:05 copy.pass.cpp
+-rw-r--r-- 1 runner runner  1648 Sep 19 08:05 ctor_int_double.pass.cpp
+-rw-r--r-- 1 runner runner   812 Sep 19 08:05 ctor_param.pass.cpp
+-rw-r--r-- 1 runner runner  1155 Sep 19 08:05 eq.pass.cpp
+-rw-r--r-- 1 runner runner 11249 Sep 19 08:05 eval.PR44847.pass.cpp
+-rw-r--r-- 1 runner runner 15492 Sep 19 08:05 eval.pass.cpp
+-rw-r--r-- 1 runner runner  5141 Sep 19 08:05 eval_param.pass.cpp
+-rw-r--r-- 1 runner runner   755 Sep 19 08:05 get_param.pass.cpp
+-rw-r--r-- 1 runner runner  1178 Sep 19 08:05 io.pass.cpp
+-rw-r--r-- 1 runner runner   702 Sep 19 08:05 max.pass.cpp
+-rw-r--r-- 1 runner runner   701 Sep 19 08:05 min.pass.cpp
+-rw-r--r-- 1 runner runner   837 Sep 19 08:05 param_assign.pass.cpp
+-rw-r--r-- 1 runner runner   832 Sep 19 08:05 param_copy.pass.cpp
+-rw-r--r-- 1 runner runner  1173 Sep 19 08:05 param_ctor.pass.cpp
+-rw-r--r-- 1 runner runner   993 Sep 19 08:05 param_eq.pass.cpp
+-rw-r--r-- 1 runner runner   835 Sep 19 08:05 param_types.pass.cpp
+-rw-r--r-- 1 runner runner   792 Sep 19 08:05 set_param.pass.cpp
+-rw-r--r-- 1 runner runner   953 Sep 19 08:05 types.pass.cpp
+total 12
+drwxr-xr-x 2 runner runner 4096 Sep 19 08:05 .
+drwxr-xr-x 6 runner runner 4096 Sep 19 08:05 ..
+-rw-r--r-- 1 runner runner  844 Sep 19 08:05 bad_engine.verify.cpp
+-rw-r--r-- 1 runner runner 52 Sep 19 08:05 nuttx/libs/libc/fdt/dtc/tests/incbin.bin
+total 108
+drwxr-xr-x 2 runner runner  4096 Sep 19 08:05 .
+drwxr-xr-x 6 runner runner  4096 Sep 19 08:05 ..
+-rw-r--r-- 1 runner runner   798 Sep 19 08:05 assign.pass.cpp
+-rw-r--r-- 1 runner runner   757 Sep 19 08:05 copy.pass.cpp
+-rw-r--r-- 1 runner runner  1648 Sep 19 08:05 ctor_int_double.pass.cpp
+-rw-r--r-- 1 runner runner   812 Sep 19 08:05 ctor_param.pass.cpp
+-rw-r--r-- 1 runner runner  1155 Sep 19 08:05 eq.pass.cpp
+-rw-r--r-- 1 runner runner 11249 Sep 19 08:05 eval.PR44847.pass.cpp
+-rw-r--r-- 1 runner runner 15492 Sep 19 08:05 eval.pass.cpp
+-rw-r--r-- 1 runner runner  5141 Sep 19 08:05 eval_param.pass.cpp
+-rw-r--r-- 1 runner runner   755 Sep 19 08:05 get_param.pass.cpp
+-rw-r--r-- 1 runner runner  1178 Sep 19 08:05 io.pass.cpp
+-rw-r--r-- 1 runner runner   702 Sep 19 08:05 max.pass.cpp
+-rw-r--r-- 1 runner runner   701 Sep 19 08:05 min.pass.cpp
+-rw-r--r-- 1 runner runner   837 Sep 19 08:05 param_assign.pass.cpp
+-rw-r--r-- 1 runner runner   832 Sep 19 08:05 param_copy.pass.cpp
+-rw-r--r-- 1 runner runner  1173 Sep 19 08:05 param_ctor.pass.cpp
+-rw-r--r-- 1 runner runner   993 Sep 19 08:05 param_eq.pass.cpp
+-rw-r--r-- 1 runner runner   835 Sep 19 08:05 param_types.pass.cpp
+-rw-r--r-- 1 runner runner   792 Sep 19 08:05 set_param.pass.cpp
+-rw-r--r-- 1 runner runner   953 Sep 19 08:05 types.pass.cpp
+total 12
+drwxr-xr-x 2 runner runner 4096 Sep 19 08:05 .
+drwxr-xr-x 6 runner runner 4096 Sep 19 08:05 ..
+-rw-r--r-- 1 runner runner  844 Sep 19 08:05 bad_engine.verify.cpp
+== Collect: ELF ==
+ls: cannot access 'nuttx/nuttx': No such file or directory
+  (no nuttx ELF at nuttx/nuttx)
+cp: -r not specified; omitting directory 'nuttx'
+== Collect: map files (any *.map under nuttx/) ==
+total 208
+drwxr-xr-x 6 runner runner  4096 Sep 19 08:05 .
+drwxr-xr-x 6 runner runner  4096 Sep 19 08:05 ..
+-rw-r--r-- 1 runner runner   716 Sep 19 08:05 allocator_mismatch.verify.cpp
+-rw-r--r-- 1 runner runner  1972 Sep 19 08:05 bucket.pass.cpp
+-rw-r--r-- 1 runner runner  2233 Sep 19 08:05 bucket_count.pass.cpp
+-rw-r--r-- 1 runner runner  2180 Sep 19 08:05 bucket_size.pass.cpp
+-rw-r--r-- 1 runner runner  1275 Sep 19 08:05 compare.pass.cpp
+-rw-r--r-- 1 runner runner  2120 Sep 19 08:05 contains.pass.cpp
+-rw-r--r-- 1 runner runner  2355 Sep 19 08:05 contains.transparent.pass.cpp
+-rw-r--r-- 1 runner runner  1919 Sep 19 08:05 count.pass.cpp
+-rw-r--r-- 1 runner runner  2328 Sep 19 08:05 count.transparent.pass.cpp
+-rw-r--r-- 1 runner runner  1150 Sep 19 08:05 empty.pass.cpp
+-rw-r--r-- 1 runner runner   675 Sep 19 08:05 empty.verify.cpp
+-rw-r--r-- 1 runner runner  6039 Sep 19 08:05 eq.pass.cpp
+-rw-r--r-- 1 runner runner  2403 Sep 19 08:05 equal_range.transparent.pass.cpp
+-rw-r--r-- 1 runner runner  2432 Sep 19 08:05 equal_range_const.pass.cpp
+-rw-r--r-- 1 runner runner  2390 Sep 19 08:05 equal_range_non_const.pass.cpp
+-rw-r--r-- 1 runner runner  2637 Sep 19 08:05 erase_if.pass.cpp
+-rw-r--r-- 1 runner runner  2310 Sep 19 08:05 find.transparent.pass.cpp
+-rw-r--r-- 1 runner runner  2123 Sep 19 08:05 find_const.pass.cpp
+-rw-r--r-- 1 runner runner  2085 Sep 19 08:05 find_non_const.pass.cpp
+-rw-r--r-- 1 runner runner  1132 Sep 19 08:05 get_allocator.pass.cpp
+-rw-r--r-- 1 runner runner   976 Sep 19 08:05 incomplete_type.pass.cpp
+-rw-r--r-- 1 runner runner  1505 Sep 19 08:05 iterator.operators.addressof.compile.pass.cpp
+-rw-r--r-- 1 runner runner  4396 Sep 19 08:05 iterator_concept_conformance.compile.pass.cpp
+-rw-r--r-- 1 runner runner  4310 Sep 19 08:05 iterators.pass.cpp
+-rw-r--r-- 1 runner runner  2354 Sep 19 08:05 load_factor.pass.cpp
+-rw-r--r-- 1 runner runner 11876 Sep 19 08:05 local_iterators.pass.cpp
+-rw-r--r-- 1 runner runner  1165 Sep 19 08:05 max_bucket_count.pass.cpp
+-rw-r--r-- 1 runner runner  1710 Sep 19 08:05 max_load_factor.pass.cpp
+-rw-r--r-- 1 runner runner  1552 Sep 19 08:05 max_size.pass.cpp
+-rw-r--r-- 1 runner runner  1493 Sep 19 08:05 range_concept_conformance.compile.pass.cpp
+-rw-r--r-- 1 runner runner  2859 Sep 19 08:05 rehash.pass.cpp
+-rw-r--r-- 1 runner runner  2852 Sep 19 08:05 reserve.pass.cpp
+-rw-r--r-- 1 runner runner  1652 Sep 19 08:05 size.pass.cpp
+-rw-r--r-- 1 runner runner 22532 Sep 19 08:05 swap_member.pass.cpp
+-rw-r--r-- 1 runner runner  4248 Sep 19 08:05 types.pass.cpp
+drwxr-xr-x 2 runner runner  4096 Sep 19 08:05 unord.map.cnstr
+drwxr-xr-x 2 runner runner  4096 Sep 19 08:05 unord.map.elem
+drwxr-xr-x 2 runner runner  4096 Sep 19 08:05 unord.map.modifiers
+drwxr-xr-x 2 runner runner  4096 Sep 19 08:05 unord.map.swap
+total 60
+drwxr-xr-x 3 runner runner 4096 Sep 19 08:05 .
+drwxr-xr-x 6 runner runner 4096 Sep 19 08:05 ..
+-rw-r--r-- 1 runner runner  902 Sep 19 08:05 assert.bucket.pass.cpp
+-rw-r--r-- 1 runner runner 1073 Sep 19 08:05 assert.bucket_size.pass.cpp
+-rw-r--r-- 1 runner runner 1096 Sep 19 08:05 assert.max_load_factor.pass.cpp
+-rw-r--r-- 1 runner runner  875 Sep 19 08:05 at.abort.pass.cpp
+-rw-r--r-- 1 runner runner  893 Sep 19 08:05 at.const.abort.pass.cpp
+-rw-r--r-- 1 runner runner 1215 Sep 19 08:05 debug.insert.hint_const_lvalue.pass.cpp
+-rw-r--r-- 1 runner runner 1088 Sep 19 08:05 debug.insert.hint_rvalue.pass.cpp
+-rw-r--r-- 1 runner runner 1349 Sep 19 08:05 debug.iterator.dereference.pass.cpp
+-rw-r--r-- 1 runner runner 1439 Sep 19 08:05 debug.iterator.increment.pass.cpp
+-rw-r--r-- 1 runner runner 1293 Sep 19 08:05 debug.local_iterator.dereference.pass.cpp
+-rw-r--r-- 1 runner runner 1601 Sep 19 08:05 debug.local_iterator.increment.pass.cpp
+-rw-r--r-- 1 runner runner 1431 Sep 19 08:05 debug.swap.pass.cpp
+drwxr-xr-x 2 runner runner 4096 Sep 19 08:05 unord.map.modifiers
+== Collect: nuttx.manifest (the build's own artifact list) ==
+ls: cannot access 'nuttx/nuttx.manifest': No such file or directory
+  (no nuttx/nuttx.manifest)
+cat: nuttx/nuttx.manifest: No such file or directory
+'binlist.txt' -> 'firmware/binlist.txt'
+grep: nuttx/.config: No such file or directory
+== Collect: SEGMENT TABLE (bootability gate) ==
+== esptool image_info (rc=2) ==
+usage: esptool image_info [-h] [--version {1,2}] filename
+esptool image_info: error: argument filename: [Errno 2] No such file or directory: 'nuttx/nuttx.bin'
+esptool_rc=2 irom=0 drom=0 validation_hash=0 (need >=1 each)
+== ZERO-ADDR GATE FAILED: /tmp/segcheck.py missing (build step did not generate it) ==
+zeroaddr_rc=2 segcount=-1 zero_load_addr_segments=-1 (need rc=0, segcount>=3 and 0 zero segments)
+== BOOTABILITY GATE FAILED: image not provably bootable ==
+   esptool_rc=2 irom=0 drom=0 validation_hash=0 zeroaddr_rc=2 segcount=-1 zero_load_addr_segments=-1.
+   A bootable image needs >=1 [IROM], >=1 [DROM] and a
+   'Validation Hash: ... (valid)' line (esptool's own per-chip
+   segment classification -- do NOT hand-write address windows).
+   Missing IROM/DROM or a missing Validation Hash is the
+   --ram-only-header fingerprint (run#55/67: 2 all-RAM segments,
+   valid Checksum but NO Validation Hash, 0 serial bytes,
+   verified on hardware 2026-09-17).
+   Usual cause: --ram-only-header still present in
+   nuttx/tools/esp32s3/Config.mk because the nuttx patch loop
+   did not run.  See BSP SECTION 2/3 in bsp.log.
+   ZERO-ADDR GATE FAILED (rc=2, segcount=-1,
+   zero_load_addr_segments=-1): a segment has load
+   address 0 and THE ROM WILL FAULT ON IT -- StoreProhibited,
+   EXCVADDR 0x00000000, then endless TG0WDT_SYS_RST reboots.
+   esp_loader.c's IS_PADD() is NuttX's own secondary loader;
+   SIMPLE_BOOT has none, so ESP-ROM:esp32s3-20210327 parses
+   this image itself and does NOT skip the segment.  esptool's
+   [PADDING] label is just its 0x00000000-0x00010000 MEMORY_MAP
+   entry.  Origin: esptool elf2image 64 KB MMU-page alignment
+   padding (esptool/bin_image.py save(): pad_segment =
+   ImageSegment(0, ...)) -- not merge_bin, not the linker.
+   NOT a hard failure here on purpose -- the verdict step decides,
+   so Collect still stages the binary for inspection.
+   --- full ESP segment table follows ---
+   (segment table unavailable: /tmp/segcheck.out not produced)
+   --- esptool image_info output follows ---
+usage: esptool image_info [-h] [--version {1,2}] filename
+esptool image_info: error: argument filename: [Errno 2] No such file or directory: 'nuttx/nuttx.bin'
+'segcount.txt' -> 'firmware/segcount.txt'
+== Collect: firmware/ contents ==
+total 20
+drwxr-xr-x  2 runner runner 4096 Sep 19 08:06 .
+drwxr-xr-x 15 runner runner 4096 Sep 19 08:06 ..
+-rw-r--r--  1 runner runner 1571 Sep 19 08:06 binlist.txt
+-rw-r--r--  1 runner runner  125 Sep 19 08:06 build_tail.log
+-rw-r--r--  1 runner runner    0 Sep 19 08:06 nuttx.bin.sha256
+-rw-r--r--  1 runner runner  257 Sep 19 08:06 segcount.txt
+== Collect: DONE ==

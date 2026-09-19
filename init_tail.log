@@ -1,0 +1,12 @@
+/usr/local/bin/repo
+<repo not installed>
+repo launcher version 2.65
+       (from /usr/local/bin/repo)
+git 2.55.0
+Python 3.10.12 (main, Jul 15 2026, 23:40:17) [GCC 11.4.0]
+OS Linux 6.8.0-1064-azure (#72~22.04.1-Ubuntu SMP Wed Jul 22 23:39:45 UTC 2026)
+CPU x86_64 (x86_64)
+Bug reports: https://issues.gerritcodereview.com/issues/new?component=1370071
+
+repo has been initialized in /home/runner/work/contest2026_393_jizhipai/contest2026_393_jizhipai/openvela
+INIT OK

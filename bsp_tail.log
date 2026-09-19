@@ -1,0 +1,69 @@
++ echo '== BSP SECTION 1/3: staging copies =='
+== BSP SECTION 1/3: staging copies ==
++ mkdir -p openvela/apps/examples
++ mkdir -p openvela/vendor/espressif/boards/esp32s3
++ '[' '!' -d openvela/apps/examples ']'
++ '[' '!' -d openvela/nuttx ']'
++ for src in team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3 team_repo/staging/apps/examples/desktop_companion team_repo/staging/vendor_espressif/boards/esp32s3/common
++ '[' '!' -e team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3 ']'
++ echo '  staging source OK: team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3'
+  staging source OK: team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3
++ for src in team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3 team_repo/staging/apps/examples/desktop_companion team_repo/staging/vendor_espressif/boards/esp32s3/common
++ '[' '!' -e team_repo/staging/apps/examples/desktop_companion ']'
++ echo '  staging source OK: team_repo/staging/apps/examples/desktop_companion'
+  staging source OK: team_repo/staging/apps/examples/desktop_companion
++ for src in team_repo/staging/vendor_espressif/boards/esp32s3/ai_vox3 team_repo/staging/apps/examples/desktop_companion team_repo/staging/vendor_espressif/boards/esp32s3/common
++ '[' '!' -e team_repo/staging/vendor_espressif/boards/esp32s3/common ']'
++ echo '  staging source OK: team_repo/staging/vendor_espressif/boards/esp32s3/common'
+  staging source OK: team_repo/staging/vendor_espressif/boards/esp32s3/common
++ echo '== BSP SECTION 1/3: staging copies =='
+== BSP SECTION 1/3: staging copies ==
++ set +x
+== BSP SECTION 1/3: staging copies DONE ==
+total 108
+drwxr-xr-x 2 runner runner  4096 Sep 19 08:06 .
+drwxr-xr-x 6 runner runner  4096 Sep 19 08:06 ..
+-rw-r--r-- 1 runner runner  1448 Sep 19 08:06 esp32s3_aliases.ld
+-rw-r--r-- 1 runner runner  2478 Sep 19 08:06 esp32s3_peripherals.ld
+-rw-r--r-- 1 runner runner  1904 Sep 19 08:06 esp32s3_rom_aliases.ld
+-rw-r--r-- 1 runner runner 23148 Sep 19 08:06 esp32s3_sections.ld
+-rw-r--r-- 1 runner runner  7773 Sep 19 08:06 flat_memory.ld
+-rw-r--r-- 1 runner runner  9724 Sep 19 08:06 kernel-space.ld
+-rw-r--r-- 1 runner runner 12270 Sep 19 08:06 legacy_sections.ld
+-rw-r--r-- 1 runner runner 14757 Sep 19 08:06 mcuboot_sections.ld
+-rw-r--r-- 1 runner runner  5013 Sep 19 08:06 protected_memory.ld
+-rw-r--r-- 1 runner runner  6951 Sep 19 08:06 user-space.ld
+== BSP SECTION 2/3: nuttx patch loop (PATCHDIR=/home/runner/work/contest2026_393_jizhipai/contest2026_393_jizhipai/team_repo/staging/patches) ==
+== NUTTX PATCH: 0001-esp_loader-map_rom_segments-override-irom-drom-size.patch ==
+patching file arch/xtensa/src/common/espressif/esp_loader.c
+applied: 0001-esp_loader-map_rom_segments-override-irom-drom-size.patch
+== NUTTX PATCH: 0002-esp32s3-Config.mk-drop-ram-only-header.patch ==
+patching file tools/esp32s3/Config.mk
+applied: 0002-esp32s3-Config.mk-drop-ram-only-header.patch
+== NUTTX PATCH: 0003-boot-heartbeat-probes.patch ==
+patching file arch/xtensa/src/esp32s3/esp32s3_start.c
+applied: 0003-boot-heartbeat-probes.patch
+== NUTTX PATCH: 0005-esp32s3-iram-split-dcache-hole.patch ==
+patching file boards/xtensa/esp32s3/common/scripts/esp32s3_sections.ld
+patching file boards/xtensa/esp32s3/common/scripts/flat_memory.ld
+applied: 0005-esp32s3-iram-split-dcache-hole.patch
+== NUTTX PATCH: 0006-kernel-app-entry-probes.patch ==
+== NUTTX PATCH NOT APPLICABLE: 0006-kernel-app-entry-probes.patch ==
+checking file arch/xtensa/src/esp32s3/esp32s3_start.c
+Hunk #1 succeeded at 439 (offset 2 lines).
+can't find file to patch at input line 31
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git a/apps/examples/desktop_companion/main.c b/apps/examples/desktop_companion/main.c
+|index 3333333..4444444 100644
+|--- a/apps/examples/desktop_companion/main.c
+|+++ b/apps/examples/desktop_companion/main.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+2 out of 2 hunks ignored
+== BSP SECTION 2/3: patch loop DONE (failures=1) ==
+== LD RE-COPY: patched nuttx .ld scripts copied to vendor common ==
+== BSP FATAL: 1 patch(es) failed to apply -- refusing to build a half-patched tree ==

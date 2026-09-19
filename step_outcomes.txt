@@ -1,0 +1,7 @@
+=== STEP OUTCOMES ===
+deps: success
+toolchain: success
+sync: success
+bsp: failure
+build: skipped (always success by design; see verdict)
+verdict: skipped

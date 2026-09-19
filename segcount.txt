@@ -1,0 +1,9 @@
+esptool_rc=2
+irom=0
+drom=0
+validation_hash=0
+zeroaddr_rc=2
+segcount=-1
+zero_load_addr_segments=-1
+usage: esptool image_info [-h] [--version {1,2}] filename
+esptool image_info: error: argument filename: [Errno 2] No such file or directory: 'nuttx/nuttx.bin'
