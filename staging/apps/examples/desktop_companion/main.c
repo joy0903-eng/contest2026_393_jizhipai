@@ -64,6 +64,8 @@
 #include "face_follow.h"
 #include "smart_home.h"
 
+extern int ets_printf(const char *fmt, ...);
+
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
@@ -618,6 +620,7 @@ int main(int argc, char *argv[])
   (void)argc;
   (void)argv;
 
+  ets_printf("[APP] desktop_companion_main entered\n");
   syslog(LOG_INFO, "AI-VOX3 desktop_companion starting (voice loop)\n");
 
   /* --- BSP bring-up -------------------------------------------------------
