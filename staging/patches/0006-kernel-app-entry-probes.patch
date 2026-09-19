@@ -18,7 +18,7 @@ diff --git a/arch/xtensa/src/esp32s3/esp32s3_start.c b/arch/xtensa/src/esp32s3/e
 index 1111111..2222222 100644
 --- a/arch/xtensa/src/esp32s3/esp32s3_start.c
 +++ b/arch/xtensa/src/esp32s3/esp32s3_start.c
-@@ -437,6 +437,7 @@
+@@ -437,4 +437,5 @@
    /* Bring up NuttX */
  
 +  ets_printf("[HB] @F nx_start entering\n");
@@ -28,15 +28,13 @@ diff --git a/apps/examples/desktop_companion/main.c b/apps/examples/desktop_comp
 index 3333333..4444444 100644
 --- a/apps/examples/desktop_companion/main.c
 +++ b/apps/examples/desktop_companion/main.c
-@@ -65,6 +65,8 @@
+@@ -65,3 +65,5 @@
  #include "smart_home.h"
  
 +extern int ets_printf(const char *fmt, ...);
 +
  /****************************************************************************
-  * Private Types
-  ****************************************************************************/
-@@ -617,6 +619,7 @@
+@@ -619,4 +619,5 @@
    (void)argc;
    (void)argv;
  
