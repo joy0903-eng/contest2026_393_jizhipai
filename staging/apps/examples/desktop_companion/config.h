@@ -89,6 +89,28 @@ extern "C"
 /* Request path of one conversation turn (see bridge_chat.py do_POST). */
 #define AIVOX3_BRIDGE_PATH          "/api/turn"
 
+/* Standalone TTS + novel-staging endpoints added for the audiobook feature
+ * (see bridge_chat.py do_POST/do_GET). /tts returns raw PCM (same format as
+ * the chat TTS audio); /upload_novel lets a PC upload a novel; /novel lets the
+ * board pull the staged novel back onto its FFat. */
+#ifndef CONFIG_AIVOX3_TTS_PATH
+#define AIVOX3_TTS_PATH             "/tts"
+#else
+#define AIVOX3_TTS_PATH             CONFIG_AIVOX3_TTS_PATH
+#endif
+
+#ifndef CONFIG_AIVOX3_NOVEL_UPLOAD_PATH
+#define AIVOX3_NOVEL_UPLOAD_PATH    "/upload_novel"
+#else
+#define AIVOX3_NOVEL_UPLOAD_PATH    CONFIG_AIVOX3_NOVEL_UPLOAD_PATH
+#endif
+
+#ifndef CONFIG_AIVOX3_NOVEL_GET_PATH
+#define AIVOX3_NOVEL_GET_PATH       "/novel"
+#else
+#define AIVOX3_NOVEL_GET_PATH       CONFIG_AIVOX3_NOVEL_GET_PATH
+#endif
+
 /* Socket inactivity timeout, seconds. A turn costs: Vosk/mimo ASR (1-4 s) +
  * a streaming LLM (3-10 s) + parallel sentence TTS (2-6 s), so the old
  * HTTP_TIMEOUT_SEC of 15 s is far too tight. Every successful recv()
@@ -143,6 +165,44 @@ extern "C"
 #define AIVOX3_AUDIO_CHANNELS  1
 
 /****************************************************************************
+ * Audiobook (novel reading) mode
+ ****************************************************************************/
+
+/* On-board FFat path the novel text is read from / written to. The board
+ * config currently mounts no writable filesystem by default, so this path only
+ * resolves once FFat is mounted there; until then the reader transparently
+ * falls back to an in-memory built-in sample (see novel_reader.c). */
+#ifndef CONFIG_AIVOX3_READ_NOVEL_PATH
+#define AIVOX3_READ_NOVEL_PATH     "/mnt/ffat/novel.txt"
+#else
+#define AIVOX3_READ_NOVEL_PATH     CONFIG_AIVOX3_READ_NOVEL_PATH
+#endif
+
+/* Hard ceiling on the novel size we will load into RAM. A whole novel is far
+ * larger, but the reading feature is meant for short stories / chapters; the
+ * bridge /upload_novel path enforces the same ceiling on the PC side. */
+#ifndef CONFIG_AIVOX3_READ_NOVEL_MAX_BYTES
+#define AIVOX3_READ_NOVEL_MAX_BYTES  (256u * 1024u)
+#else
+#define AIVOX3_READ_NOVEL_MAX_BYTES  CONFIG_AIVOX3_READ_NOVEL_MAX_BYTES
+#endif
+
+/* Built-in sample novel used when no file is present on FFat yet. It is
+ * written to AIVOX3_READ_NOVEL_PATH on first boot (best effort) so the
+ * reading demo always has content, and demonstrates chapter detection
+ * (第N章 / 第N回) plus multi-line segmentation. */
+#define AIVOX3_BUILTIN_NOVEL                                               \
+  "第一章 初入江湖\n"                                                      \
+  "风起云涌，少年持剑走出了大山。\n"                                      \
+  "他望着眼前的城池，心中既忐忑又充满期待。\n"                            \
+  "第二章 偶遇\n"                                                          \
+  "酒馆之中，一位白衣老者向他招了招手。\n"                                \
+  "年轻人，你的路才刚刚开始。老者笑着说道。\n"                            \
+  "第三章 试炼\n"                                                          \
+  "山道崎岖，云雾缭绕，隐约传来阵阵钟声。\n"                            \
+  "他深吸一口气，迈开脚步向山顶走去。\n"
+
+/****************************************************************************
  * Top-level application state machine
  ****************************************************************************/
 
@@ -153,10 +213,12 @@ typedef enum
   AIVOX3_STATE_LISTEN,      /* waiting for a finished VAD utterance        */
   AIVOX3_STATE_TALK,        /* upload the utterance to the PC voice bridge */
   AIVOX3_STATE_SPEAK,       /* play the returned TTS PCM, show the reply   */
-  AIVOX3_STATE_SLEEP        /* low-power / dimmed: capture stopped         */
+  AIVOX3_STATE_SLEEP,       /* low-power / dimmed: capture stopped         */
+  AIVOX3_STATE_MODE_READ,   /* audiobook: loading the novel, mic is off   */
+  AIVOX3_STATE_READING      /* audiobook: synthesizing + playing a segment */
 } aivox3_state_t;
 
-#define AIVOX3_STATE_COUNT     6
+#define AIVOX3_STATE_COUNT     8
 
 #ifdef __cplusplus
 }

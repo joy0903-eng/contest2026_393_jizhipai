@@ -155,6 +155,49 @@ void bridge_set_endpoint(const char *host, uint16_t port);
 const char *bridge_host(void);
 uint16_t    bridge_port(void);
 
+/****************************************************************************
+ * Name: bridge_tts_synthesize
+ *
+ * Description:
+ *   Standalone text-to-speech used by the audiobook feature. POSTs
+ *   {"text": "..."} (Content-Type: application/json) to the bridge /tts
+ *   endpoint and streams the raw response body (which is the synthesised PCM,
+ *   16 kHz / 16-bit / mono, little-endian -- identical to the chat TTS audio)
+ *   into a heap buffer.
+ *
+ * Input Parameters:
+ *   text      - UTF-8 text to speak (one segment; NOT NUL-empty).
+ *   out_pcm   - receives a heap pointer to the PCM on success (free with
+ *               bridge_tts_result_free() / free()).
+ *   out_len   - receives the PCM byte count.
+ *
+ * Returned Value:
+ *   OK (0) on success; negated errno otherwise (-EINVAL, -ENODATA empty
+ *   payload, -ENETUNREACH/-EHOSTUNREACH transport, -ETIMEDOUT, -EIO >= 400
+ *   HTTP status). On any failure *out_pcm is set to NULL.
+ ****************************************************************************/
+
+int  bridge_tts_synthesize(const char *text, uint8_t **out_pcm, size_t *out_len);
+void bridge_tts_result_free(uint8_t *pcm);
+
+/****************************************************************************
+ * Name: bridge_novel_upload / bridge_novel_download
+ *
+ * Description:
+ *   Novel staging on the PC bridge. bridge_novel_upload() POSTs the user's
+ *   novel text to /upload_novel (the bridge persists it to disk).
+ *   bridge_novel_download() GETs /novel and copies the staged text into the
+ *   caller buffer. The board uses the download path to pull a freshly
+ *   uploaded novel onto its FFat on read-start (see main.c).
+ *
+ * Returned Value:
+ *   OK (0) on success; negated errno otherwise. bridge_novel_download()
+ *   returns -ENOENT when the bridge has no novel staged (HTTP 404).
+ ****************************************************************************/
+
+int bridge_novel_upload(const char *text, size_t len);
+int bridge_novel_download(uint8_t *buf, size_t cap, size_t *out_len);
+
 #ifdef __cplusplus
 }
 #endif

@@ -44,10 +44,12 @@
 #include <nuttx/config.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 #include <syslog.h>
@@ -63,6 +65,7 @@
 #include "voice_bridge.h"
 #include "face_follow.h"
 #include "smart_home.h"
+#include "novel_reader.h"
 
 extern int ets_printf(const char *fmt, ...);
 
@@ -145,6 +148,21 @@ static bool   g_vad_warned  = false;
 static bool   g_kws_warned  = false;
 static bool   g_mic_warned  = false;
 
+/* --- Audiobook / novel-reading mode -----------------------------------------
+ * The reading feature REUSES the chat TTS playback path: it sends one text
+ * segment to the bridge /tts endpoint and plays the returned PCM through
+ * audio_play_pcm(). It never touches the chat loop's core logic; it only adds
+ * two new top-level states (MODE_READ / READING) entered from IDLE/SLEEP.
+ */
+static bool     g_read_req     = false;   /* serial `read` or LVGL start  */
+static bool     g_read_paused  = false;   /* pause/resume latch           */
+static bool     g_read_stop    = false;   /* leave reading mode           */
+static bool     g_read_next    = false;   /* skip to next segment         */
+static bool     g_read_prev    = false;   /* back one segment             */
+static char     g_read_file[128];         /* optional `read <file>` arg   */
+static uint8_t *g_read_pcm     = NULL;    /* heap PCM for current segment */
+static size_t   g_read_pcm_len = 0;
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
@@ -165,6 +183,44 @@ static void btn_callback(int btn_id)
   else if (btn_id == AI_VOX3_BTN_BOOT)
     {
       g_sleep_req = true;
+    }
+}
+
+/****************************************************************************
+ * Name: read_ui_button
+ *
+ * Description:
+ *   LVGL reading-button callback (mirrors btn_callback for hardware buttons).
+ *   Each press only latches a request flag; the main-loop state machine acts on
+ *   it when it is safe to do so (never mid-chat).
+ ****************************************************************************/
+
+static void read_ui_button(int id)
+{
+  switch (id)
+    {
+      case UI_BTN_READ_START:
+        g_read_req = true;
+        break;
+
+      case UI_BTN_READ_PAUSE:
+        g_read_paused = true;
+        break;
+
+      case UI_BTN_READ_RESUME:
+        g_read_paused = false;
+        break;
+
+      case UI_BTN_READ_NEXT:
+        g_read_next = true;
+        break;
+
+      case UI_BTN_READ_STOP:
+        g_read_stop = true;
+        break;
+
+      default:
+        break;
     }
 }
 
@@ -382,6 +438,60 @@ static void handle_serial_line(const char *line)
     {
       todo_clear();
       set_status("Todo list cleared");
+      return;
+    }
+
+  /* Audiobook (novel reading) controls. Accepted at any time; the state machine
+   * only acts on them from a safe state (IDLE/SLEEP), so a chat in progress is
+   * never disturbed. */
+  if (strncmp(line, "read", 4) == 0 &&
+      (line[4] == '\0' || line[4] == ' '))
+    {
+      const char *p = line + 4;
+      while (*p == ' ')
+        {
+          p++;
+        }
+
+      strncpy(g_read_file, p, sizeof(g_read_file) - 1);
+      g_read_file[sizeof(g_read_file) - 1] = '\0';
+      g_read_req = true;
+      printf("read: queued (start on next idle)\n");
+      fflush(stdout);
+      return;
+    }
+
+  if (strcmp(line, "pause") == 0)
+    {
+      g_read_paused = true;
+      printf("read: paused\n");
+      fflush(stdout);
+      return;
+    }
+
+  if (strcmp(line, "resume") == 0)
+    {
+      g_read_paused = false;
+      printf("read: resumed\n");
+      fflush(stdout);
+      return;
+    }
+
+  if (strcmp(line, "next") == 0)
+    {
+      g_read_next = true;
+      return;
+    }
+
+  if (strcmp(line, "prev") == 0)
+    {
+      g_read_prev = true;
+      return;
+    }
+
+  if (strcmp(line, "stop") == 0)
+    {
+      g_read_stop = true;
       return;
     }
 
@@ -653,6 +763,10 @@ int main(int argc, char *argv[])
       syslog(LOG_ERR, "ERROR: ui_init failed: %d -- UI will be BLANK\n", ret);
     }
 
+  /* Wire the LVGL reading buttons (start / pause / resume / next / stop) to the
+   * same request-latch pattern used by the hardware buttons. */
+  ui_set_button_callback(read_ui_button);
+
   net_init();
   audio_init();
   face_follow_enable(true);
@@ -720,6 +834,16 @@ int main(int argc, char *argv[])
               ui_set_expression(UI_EXPR_SLEEP);
               set_status("Sleeping (BOOT to wake)");
             }
+        }
+
+      /* Reading mode request (serial `read` or LVGL start button). Only honoured
+       * from IDLE/SLEEP so an in-flight chat is never interrupted. */
+      if (g_read_req &&
+          (g_state == AIVOX3_STATE_IDLE ||
+           g_state == AIVOX3_STATE_SLEEP))
+        {
+          g_read_req = false;
+          g_state    = AIVOX3_STATE_MODE_READ;
         }
 
       switch (g_state)
@@ -934,6 +1058,224 @@ int main(int argc, char *argv[])
               g_utt_nsamples = 0;
               set_status("Standby -- talk to me");
               g_state = AIVOX3_STATE_IDLE;
+              break;
+            }
+
+          case AIVOX3_STATE_MODE_READ:
+            {
+              const char *rpath = g_read_file[0] != '\0' ?
+                                  g_read_file : AIVOX3_READ_NOVEL_PATH;
+              int         rr;
+
+              set_status("Reading mode...");
+              ui_set_reading_mode(true);
+
+              /* The microphone must stay off while reading: the codec is
+               * half-duplex and we must not let the VAD eavesdrop on the book
+               * (it would start a chat turn mid-chapter). */
+              (void)audio_capture_stop();
+
+              /* If the local novel file is missing, try to pull the one the user
+               * staged on the PC bridge via /upload_novel and persist it onto
+               * FFat. Falls back to the built-in sample if the pull fails or
+               * there is no network. */
+              if (net_is_connected())
+                {
+                  int fd = open(rpath, O_RDONLY);
+                  if (fd < 0)
+                    {
+                      uint8_t *nb = (uint8_t *)malloc(
+                                      (size_t)AIVOX3_READ_NOVEL_MAX_BYTES);
+                      size_t   nlen = 0;
+
+                      if (nb != NULL &&
+                          bridge_novel_download(
+                            nb, (size_t)AIVOX3_READ_NOVEL_MAX_BYTES,
+                            &nlen) == OK && nlen > 0)
+                        {
+                          int wfd = open(rpath,
+                                         O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                          if (wfd >= 0)
+                            {
+                              (void)write(wfd, nb, nlen);
+                              close(wfd);
+                            }
+                        }
+
+                      if (nb != NULL)
+                        {
+                          free(nb);
+                        }
+                    }
+                  else
+                    {
+                      close(fd);
+                    }
+                }
+
+              rr = novel_reader_open(rpath);
+              if (rr < 0)
+                {
+                  syslog(LOG_ERR, "ERROR: cannot open novel: %d\n", rr);
+                  set_status("No novel available");
+                  ui_set_reading_mode(false);
+                  rearm_mic();
+                  g_state = AIVOX3_STATE_IDLE;
+                  break;
+                }
+
+              g_read_pcm      = NULL;
+              g_read_pcm_len  = 0;
+              g_read_paused   = false;
+              g_read_stop     = false;
+              g_read_next     = false;
+              g_read_prev     = false;
+              g_state = AIVOX3_STATE_READING;
+              break;
+            }
+
+          case AIVOX3_STATE_READING:
+            {
+              int   ch;
+              int   ln;
+              int   tot;
+              int   pct;
+              char  seg[1024];
+              size_t seglen = 0;
+
+              /* Control: leave reading mode. */
+              if (g_read_stop)
+                {
+                  g_read_stop = false;
+                  novel_reader_close();
+                  if (g_read_pcm != NULL)
+                    {
+                      free(g_read_pcm);
+                      g_read_pcm = NULL;
+                    }
+
+                  g_read_pcm_len = 0;
+                  ui_set_reading_mode(false);
+                  set_status("Standby -- talk to me");
+                  ui_set_expression(UI_EXPR_IDLE);
+                  rearm_mic();
+                  g_state = AIVOX3_STATE_IDLE;
+                  break;
+                }
+
+              /* Control: skip backward / forward one segment. */
+              if (g_read_prev)
+                {
+                  g_read_prev = false;
+                  if (g_read_pcm != NULL)
+                    {
+                      free(g_read_pcm);
+                      g_read_pcm = NULL;
+                    }
+
+                  g_read_pcm_len = 0;
+                  if (novel_reader_prev() < 0)
+                    {
+                      set_status("Already at start");
+                    }
+
+                  g_read_paused = false;
+                }
+
+              if (g_read_next)
+                {
+                  g_read_next = false;
+                  if (g_read_pcm != NULL)
+                    {
+                      free(g_read_pcm);
+                      g_read_pcm = NULL;
+                    }
+
+                  g_read_pcm_len = 0;
+                  if (novel_reader_next() < 0)
+                    {
+                      novel_reader_close();
+                      ui_set_reading_mode(false);
+                      set_status("Book finished");
+                      ui_set_expression(UI_EXPR_HAPPY);
+                      rearm_mic();
+                      g_state = AIVOX3_STATE_IDLE;
+                      break;
+                    }
+
+                  g_read_paused = false;
+                }
+
+              if (g_read_paused)
+                {
+                  set_status("Paused");
+                  break;
+                }
+
+              ch  = novel_reader_chapter();
+              ln  = novel_reader_line();
+              tot = novel_reader_total();
+              pct = novel_reader_progress();
+
+              /* Need TTS for the current segment? */
+              if (g_read_pcm == NULL)
+                {
+                  int sr = novel_reader_current(seg, sizeof(seg), &seglen);
+                  if (sr < 0)
+                    {
+                      /* Nothing left to read. */
+                      novel_reader_close();
+                      ui_set_reading_mode(false);
+                      set_status("Book finished");
+                      ui_set_expression(UI_EXPR_HAPPY);
+                      rearm_mic();
+                      g_state = AIVOX3_STATE_IDLE;
+                      break;
+                    }
+
+                  ui_set_expression(UI_EXPR_THINK);
+                  set_status("Synthesizing...");
+
+                  int tr = bridge_tts_synthesize(seg, &g_read_pcm,
+                                                &g_read_pcm_len);
+                  if (tr < 0 || g_read_pcm_len == 0)
+                    {
+                      syslog(LOG_WARNING,
+                             "WARNING: TTS failed (%d); skip segment\n", tr);
+                      if (g_read_pcm != NULL)
+                        {
+                          free(g_read_pcm);
+                          g_read_pcm = NULL;
+                        }
+
+                      g_read_pcm_len = 0;
+                      novel_reader_next();
+                      break;
+                    }
+                }
+
+              ui_set_expression(UI_EXPR_SPEAK);
+              ui_show_reading(ch, ln, tot, pct);
+              set_status("Reading...");
+
+              /* Reuses the exact chat TTS playback path. Blocking, like SPEAK. */
+              (void)audio_play_pcm(g_read_pcm, g_read_pcm_len);
+              free(g_read_pcm);
+              g_read_pcm = NULL;
+              g_read_pcm_len = 0;
+
+              /* Advance to the next segment (end-of-book ends the mode). */
+              if (novel_reader_next() < 0)
+                {
+                  novel_reader_close();
+                  ui_set_reading_mode(false);
+                  set_status("Book finished");
+                  ui_set_expression(UI_EXPR_HAPPY);
+                  rearm_mic();
+                  g_state = AIVOX3_STATE_IDLE;
+                  break;
+                }
+
               break;
             }
 

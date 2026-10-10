@@ -62,6 +62,35 @@ void ui_set_status(const char *text);
 /* Drive the LVGL task handler (call periodically from the main loop). */
 void ui_refresh(void);
 
+/* --- Audiobook (novel reading) UI ----------------------------------------- */
+
+/* IDs reported to the reading button callback (distinct from the hardware
+ * button IDs AI_VOX3_BTN_* used by the BSP). */
+enum ui_read_btn_e
+{
+  UI_BTN_READ_START = 100,   /* enter reading mode (IDLE screen)        */
+  UI_BTN_READ_PAUSE,         /* pause playback                         */
+  UI_BTN_READ_RESUME,        /* resume playback                        */
+  UI_BTN_READ_NEXT,          /* skip to the next segment / chapter     */
+  UI_BTN_READ_STOP           /* leave reading mode                     */
+};
+
+/* Callback type fired when a reading button (LVGL touch) is pressed. */
+typedef void (*ui_btn_cb_t)(int btn_id);
+
+/* Register the button callback. NULL disables it. Safe to call before ui_init
+ * (the handler is stored and wired up at init). */
+void ui_set_button_callback(ui_btn_cb_t cb);
+
+/* Show/hide the reading controls. When `reading` is true the "start" button is
+ * hidden and the pause/resume/next/stop controls are shown; otherwise the
+ * reverse. Call this on every reading-mode transition. */
+void ui_set_reading_mode(bool reading);
+
+/* Update the reading progress readout: chapter / line-in-chapter / total
+ * segments / percentage. */
+void ui_show_reading(int chapter, int line, int total, int pct);
+
 #ifdef __cplusplus
 }
 #endif

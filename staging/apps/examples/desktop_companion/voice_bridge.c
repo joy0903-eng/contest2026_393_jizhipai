@@ -938,6 +938,244 @@ int bridge_turn_text(const char *text, bridge_turn_result_t *res)
 }
 
 /****************************************************************************
+ * Name: bin_body_cb
+ *
+ * Description:
+ *   Generic raw-byte sink for http_request_stream(): appends every response
+ *   body chunk into a growable byte buffer (struct pcm_sink_s is just bytes).
+ ****************************************************************************/
+
+static int bin_body_cb(const uint8_t *chunk, size_t len, void *arg)
+{
+  struct pcm_sink_s *s = (struct pcm_sink_s *)arg;
+
+  sink_put(s, chunk, len);
+  return OK;
+}
+
+/****************************************************************************
+ * Name: bridge_tts_synthesize
+ ****************************************************************************/
+
+int bridge_tts_synthesize(const char *text, uint8_t **out_pcm, size_t *out_len)
+{
+  struct pcm_sink_s sink;
+  size_t             tlen;
+  char              *esc;
+  char              *body;
+  int                status = 0;
+  int                ret;
+
+  if (text == NULL || text[0] == '\0' || out_pcm == NULL || out_len == NULL)
+    {
+      return -EINVAL;
+    }
+
+  *out_pcm = NULL;
+  *out_len = 0;
+
+  tlen = strlen(text);
+  esc  = (char *)malloc(tlen * 2u + 16u);
+  body = (char *)malloc(tlen * 2u + 32u);
+  if (esc == NULL || body == NULL)
+    {
+      free(esc);
+      free(body);
+      return -ENOMEM;
+    }
+
+  json_escape(esc, tlen * 2u + 16u, text);
+  snprintf(body, tlen * 2u + 32u, "{\"text\":\"%s\"}", esc);
+
+  sink_init(&sink);
+
+  syslog(LOG_INFO, "bridge: POST %s (%s:%u) tts '%s...'\n",
+         AIVOX3_TTS_PATH, g_host, (unsigned)g_port,
+         tlen > 16 ? text : text);
+
+  ret = http_request_stream(g_host, g_port, "POST", AIVOX3_TTS_PATH,
+                            JSON_HDR, (const uint8_t *)body, strlen(body),
+                            bin_body_cb, &sink,
+                            AIVOX3_BRIDGE_TIMEOUT_SEC, &status);
+
+  free(esc);
+  free(body);
+
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: bridge /tts failed: %d\n", ret);
+      if (sink.buf != NULL)
+        {
+          free(sink.buf);
+        }
+
+      return ret;
+    }
+
+  if (status >= 400)
+    {
+      syslog(LOG_ERR, "ERROR: bridge /tts HTTP %d\n", status);
+      if (sink.buf != NULL)
+        {
+          free(sink.buf);
+        }
+
+      return -EIO;
+    }
+
+  if (sink.len == 0)
+    {
+      syslog(LOG_WARNING, "WARNING: bridge /tts returned empty PCM\n");
+      if (sink.buf != NULL)
+        {
+          free(sink.buf);
+        }
+
+      return -ENODATA;
+    }
+
+  *out_pcm = sink.buf;
+  *out_len = sink.len;
+  syslog(LOG_INFO, "bridge: /tts -> %lu bytes PCM\n",
+         (unsigned long)sink.len);
+  return OK;
+}
+
+/****************************************************************************
+ * Name: bridge_tts_result_free
+ ****************************************************************************/
+
+void bridge_tts_result_free(uint8_t *pcm)
+{
+  if (pcm != NULL)
+    {
+      free(pcm);
+    }
+}
+
+/****************************************************************************
+ * Name: bridge_novel_upload
+ ****************************************************************************/
+
+int bridge_novel_upload(const char *text, size_t len)
+{
+  char  *esc;
+  char  *body;
+  size_t blen;
+  int    status = 0;
+  int    ret;
+
+  if (text == NULL || len == 0)
+    {
+      return -EINVAL;
+    }
+
+  esc  = (char *)malloc(len * 2u + 16u);
+  body = (char *)malloc(len * 2u + 32u);
+  if (esc == NULL || body == NULL)
+    {
+      free(esc);
+      free(body);
+      return -ENOMEM;
+    }
+
+  json_escape(esc, len * 2u + 16u, text);
+  snprintf(body, len * 2u + 32u, "{\"text\":\"%s\"}", esc);
+  blen = strlen(body);
+
+  ret = http_request_stream(g_host, g_port, "POST", AIVOX3_NOVEL_UPLOAD_PATH,
+                            JSON_HDR, (const uint8_t *)body, blen,
+                            NULL, NULL, AIVOX3_BRIDGE_TIMEOUT_SEC, &status);
+
+  free(esc);
+  free(body);
+
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: bridge /upload_novel failed: %d\n", ret);
+      return ret;
+    }
+
+  if (status >= 400)
+    {
+      syslog(LOG_ERR, "ERROR: bridge /upload_novel HTTP %d\n", status);
+      return -EIO;
+    }
+
+  return OK;
+}
+
+/****************************************************************************
+ * Name: bridge_novel_download
+ ****************************************************************************/
+
+int bridge_novel_download(uint8_t *buf, size_t cap, size_t *out_len)
+{
+  struct pcm_sink_s sink;
+  int                status = 0;
+  int                ret;
+
+  if (buf == NULL || out_len == NULL)
+    {
+      return -EINVAL;
+    }
+
+  *out_len = 0;
+  sink_init(&sink);
+
+  ret = http_request_stream(g_host, g_port, "GET", AIVOX3_NOVEL_GET_PATH,
+                            NULL, NULL, 0,
+                            bin_body_cb, &sink,
+                            AIVOX3_BRIDGE_TIMEOUT_SEC, &status);
+
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: bridge /novel failed: %d\n", ret);
+      if (sink.buf != NULL)
+        {
+          free(sink.buf);
+        }
+
+      return ret;
+    }
+
+  if (status == 404)
+    {
+      if (sink.buf != NULL)
+        {
+          free(sink.buf);
+        }
+
+      return -ENOENT;
+    }
+
+  if (status >= 400)
+    {
+      syslog(LOG_ERR, "ERROR: bridge /novel HTTP %d\n", status);
+      if (sink.buf != NULL)
+        {
+          free(sink.buf);
+        }
+
+      return -EIO;
+    }
+
+  if (sink.buf != NULL && sink.len > 0)
+    {
+      size_t n = (sink.len < cap) ? sink.len : cap;
+      memcpy(buf, sink.buf, n);
+      *out_len = n;
+    }
+
+  if (sink.buf != NULL)
+    {
+      free(sink.buf);
+    }
+
+  return OK;
+}
+
+/****************************************************************************
  * Name: bridge_set_endpoint
  ****************************************************************************/
 

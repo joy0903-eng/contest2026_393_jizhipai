@@ -345,6 +345,11 @@ CONFIG_AIVOX3_BRIDGE_PORT=8765
 # 18.2 s (text); the bridge's own LLM timeout is (5,40).  60 s is safe.
 CONFIG_AIVOX3_BRIDGE_TIMEOUT=60
 
+# --- Audiobook (novel reading) mode ------------------------------------------
+CONFIG_AIVOX3_READ_ENABLED=y
+CONFIG_AIVOX3_READ_NOVEL_PATH="/mnt/ffat/novel.txt"
+CONFIG_AIVOX3_READ_NOVEL_MAX_BYTES=262144
+
 # --- NSH base ----------------------------------------------------------------
 CONFIG_BOARDCTL=y
 CONFIG_FS_PROCFS=y

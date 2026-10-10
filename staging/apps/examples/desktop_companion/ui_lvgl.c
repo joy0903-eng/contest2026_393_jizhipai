@@ -25,6 +25,7 @@
 #include <nuttx/config.h>
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 #include <syslog.h>
 
@@ -57,7 +58,58 @@ static lv_obj_t *g_time;
 static lv_obj_t *g_weather;
 static lv_obj_t *g_todo;
 static lv_obj_t *g_status;
+static lv_obj_t *g_read_start;   /* "READ" button (visible in IDLE)    */
+static lv_obj_t *g_read_pause;   /* reading controls (visible in READ)  */
+static lv_obj_t *g_read_resume;
+static lv_obj_t *g_read_next;
+static lv_obj_t *g_read_stop;
+static lv_obj_t *g_read_info;    /* chapter / line / progress readout   */
+static ui_btn_cb_t g_btn_cb = NULL;
 static bool      g_ui_ready = false;
+
+/****************************************************************************
+ * Private Functions
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: read_btn_event
+ *
+ * Description:
+ *   LVGL event callback for the reading buttons. The button id is passed as the
+ *   event's user data (the LVGL v8-idiomatic way), set when the callback was
+ *   registered in make_read_btn().
+ ****************************************************************************/
+
+static void read_btn_event(lv_event_t *e)
+{
+  if (g_btn_cb == NULL)
+    {
+      return;
+    }
+
+  int id = (int)(intptr_t)lv_event_get_user_data(e);
+
+  g_btn_cb(id);
+}
+
+/****************************************************************************
+ * Name: make_read_btn
+ *
+ * Description:
+ *   Create one reading button (hidden by default) and wire its click handler.
+ ****************************************************************************/
+
+static lv_obj_t *make_read_btn(const char *label, int id)
+{
+  lv_obj_t *btn = lv_btn_create(g_screen);
+  lv_obj_t *lbl = lv_label_create(btn);
+
+  lv_label_set_text(lbl, label);
+  lv_obj_add_event_cb(btn, read_btn_event, LV_EVENT_CLICKED,
+                      (void *)(intptr_t)id);
+  lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
+  return btn;
+}
 
 /****************************************************************************
  * Public Functions
@@ -123,6 +175,29 @@ int ui_init(void)
   lv_label_set_long_mode(g_status, LV_LABEL_LONG_WRAP);
   lv_obj_align(g_status, LV_ALIGN_BOTTOM_MID, 0, -6);
   lv_label_set_text(g_status, "AI-VOX3 ready");
+
+  /* --- Reading (audiobook) controls --- */
+  g_read_info = lv_label_create(g_screen);
+  lv_obj_set_width(g_read_info, AIVOX3_LCD_WIDTH - 16);
+  lv_label_set_long_mode(g_read_info, LV_LABEL_LONG_WRAP);
+  lv_obj_align(g_read_info, LV_ALIGN_BOTTOM_MID, 0, -22);
+  lv_label_set_text(g_read_info, "");
+  lv_obj_add_flag(g_read_info, LV_OBJ_FLAG_HIDDEN);
+
+  g_read_start = make_read_btn("READ", UI_BTN_READ_START);
+  lv_obj_align(g_read_start, LV_ALIGN_TOP_MID, 0, 60);
+
+  g_read_pause = make_read_btn("II", UI_BTN_READ_PAUSE);
+  lv_obj_align(g_read_pause, LV_ALIGN_BOTTOM_LEFT, 4, -6);
+  g_read_resume = make_read_btn(">", UI_BTN_READ_RESUME);
+  lv_obj_align(g_read_resume, LV_ALIGN_BOTTOM_LEFT, 50, -6);
+  g_read_next = make_read_btn(">>", UI_BTN_READ_NEXT);
+  lv_obj_align(g_read_next, LV_ALIGN_BOTTOM_MID, 0, -6);
+  g_read_stop = make_read_btn("X", UI_BTN_READ_STOP);
+  lv_obj_align(g_read_stop, LV_ALIGN_BOTTOM_RIGHT, -4, -6);
+
+  /* IDLE shows only the start button; reading shows the controls. */
+  ui_set_reading_mode(false);
 
   g_ui_ready = true;
   ui_set_expression(UI_EXPR_IDLE);
@@ -226,4 +301,61 @@ void ui_refresh(void)
     {
       lv_timer_handler();
     }
+}
+
+/****************************************************************************
+ * Name: ui_set_button_callback
+ ****************************************************************************/
+
+void ui_set_button_callback(ui_btn_cb_t cb)
+{
+  g_btn_cb = cb;
+}
+
+/****************************************************************************
+ * Name: ui_set_reading_mode
+ ****************************************************************************/
+
+void ui_set_reading_mode(bool reading)
+{
+  if (!g_ui_ready)
+    {
+      return;
+    }
+
+  if (reading)
+    {
+      lv_obj_add_flag(g_read_start, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_clear_flag(g_read_pause, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_clear_flag(g_read_resume, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_clear_flag(g_read_next, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_clear_flag(g_read_stop, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_clear_flag(g_read_info, LV_OBJ_FLAG_HIDDEN);
+    }
+  else
+    {
+      lv_obj_clear_flag(g_read_start, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(g_read_pause, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(g_read_resume, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(g_read_next, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(g_read_stop, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(g_read_info, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+/****************************************************************************
+ * Name: ui_show_reading
+ ****************************************************************************/
+
+void ui_show_reading(int chapter, int line, int total, int pct)
+{
+  char buf[48];
+
+  if (!g_ui_ready)
+    {
+      return;
+    }
+
+  snprintf(buf, sizeof(buf), "Ch%d L%d/%d %d%%", chapter, line, total, pct);
+  lv_label_set_text(g_read_info, buf);
 }

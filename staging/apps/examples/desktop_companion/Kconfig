@@ -114,4 +114,32 @@ config EXAMPLES_DESKTOP_COMPANION
       front-end geometry, feature scaling and distance metric are identical.
       Set 0 to require kws_learn() to calibrate a threshold first.
 
+  config AIVOX3_READ_ENABLED
+    bool "Audiobook (novel reading) mode"
+    default y
+    ---help---
+      Adds the "read the novel" feature: load a novel text from FFat, send each
+      segment to the PC bridge /tts endpoint and play the returned PCM through
+      the existing chat TTS path. Trigger via the serial 'read' command, an
+      LVGL "READ" button, or 'pause'/'resume'/'next'/'prev'/'stop' to control
+      playback.
+
+  config AIVOX3_READ_NOVEL_PATH
+    string "Novel file path on FFat"
+    default "/mnt/ffat/novel.txt"
+    depends on AIVOX3_READ_ENABLED
+    ---help---
+      POSIX path the reader opens for the novel text (and writes the built-in
+      sample to on first boot). Must resolve inside a mounted, writable FFat.
+
+  config AIVOX3_READ_NOVEL_MAX_BYTES
+    int "Max novel size loaded into RAM (bytes)"
+    default 262144
+    range 8192 4194304
+    depends on AIVOX3_READ_ENABLED
+    ---help---
+      Upper bound on the novel bytes loaded into RAM. The reading feature is
+      intended for short stories / chapters; the bridge /upload_novel enforces
+      the same ceiling on the PC side.
+
   endif
