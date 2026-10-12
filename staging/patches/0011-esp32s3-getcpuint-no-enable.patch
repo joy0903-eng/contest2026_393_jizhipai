@@ -1,0 +1,31 @@
+Fix silent-boot hang on AI-VOX3 (2nd instance): esp32s3_getcpuint() must
+NOT enable the CPU interrupt at allocation time.  esp32s3_setup_irq() is
+called during up_irqinitialize() before the ISR is attached, so enabling
+the cpuint there lets a pending peripheral interrupt panic.  The driver
+enables the cpuint with up_enable_irq() after irq_attach().
+--- a/arch/xtensa/src/esp32s3/esp32s3_irq.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_irq.c
+@@ -336,16 +336,16 @@
+             }
+         }
+     }
+ 
+-  /* Enable the CPU interrupt now.  The interrupt is still not attached
+-   * to any peripheral and thus has no effect.
++  /* FIX: do NOT enable the CPU interrupt here.  esp32s3_setup_irq() is
++   * called from up_irqinitialize() (board early init) via
++   * esp32s3_gpioirqinitialize()/rtcioirqinitialize() BEFORE the ISR is
++   * attached with irq_attach().  Enabling the cpuint now lets a pending
++   * peripheral interrupt vector straight to irq_unexpected_isr ->
++   * PANIC() (silent boot hang seen at @IG0/@IR0).  The driver enables
++   * the cpuint itself with up_enable_irq() after it attaches its handler.
+    */
+-
+-  if (ret >= 0)
+-    {
+-      xtensa_enable_cpuint(&per_cpu_var_smp(g_intenable, cpu), ret);
+-    }
+ 
+   return ret;
+ }
+ 
