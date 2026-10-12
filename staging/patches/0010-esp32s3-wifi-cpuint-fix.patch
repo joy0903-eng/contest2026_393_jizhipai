@@ -1,0 +1,23 @@
+Fix silent-boot hang on AI-VOX3: do not pre-enable the WiFi MAC CPU
+interrupt inside up_irqinitialize().  The MAC peripheral asserts at cold
+boot before its ISR is registered, so enabling it there triggers an
+unhandled interrupt -> PANIC() loop.  Keep the g_cpu0_intmap mapping;
+the WiFi driver enables the CPU interrupt when it attaches its handler.
+--- a/arch/xtensa/src/esp32s3/esp32s3_irq.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_irq.c
+@@ -498,9 +498,14 @@
+ 
+ #ifdef CONFIG_ESP32S3_WIFI
+   g_cpu0_intmap[ESP32S3_CPUINT_MAC] = CPUINT_ASSIGN(ESP32S3_IRQ_MAC);
+   g_cpu0_intmap[ESP32S3_CPUINT_PWR] = CPUINT_ASSIGN(ESP32S3_IRQ_PWR);
+-  xtensa_enable_cpuint(&per_cpu_var_smp(g_intenable, 0), ESP32S3_CPUINT_MAC);
++  /* FIX: do NOT pre-enable the MAC CPU interrupt here.  At cold boot the
++   * WiFi MAC peripheral asserts an interrupt before its ISR is attached
++   * (the ISR is registered later, during up_initialize/board init), so
++   * enabling it now vectors straight to irq_unexpected_isr -> PANIC() ->
++   * a silent hang (board reached @IX1 then froze).  The WiFi driver
++   * enables this CPU interrupt itself when it attaches its handler. */
+ #endif
+ 
+ #ifdef CONFIG_SMP
+   /* Attach and enable the inter-CPU interrupt */
