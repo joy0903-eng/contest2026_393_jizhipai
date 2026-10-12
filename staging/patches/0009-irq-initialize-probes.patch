@@ -1,0 +1,164 @@
+DEBUG-ONLY: add fine ROM heartbeat probes inside irq_initialize() and
+up_irqinitialize() (and inside esp32s3_gpioirqinitialize / rtcioirqinitialize)
+to pinpoint the @HW3->hang inside the IRQ subsystem init. Revert later.
+--- a/sched/irq/irq_initialize.c
++++ b/sched/irq/irq_initialize.c
+@@ -31,6 +31,8 @@
+ 
+ #include <assert.h>
+ #include "irq/irq.h"
++/* DEBUG-ONLY: ROM heartbeat probes. */
++extern int ets_printf(const char *fmt, ...);
+ 
+ /****************************************************************************
+  * Pre-processor Definitions
+@@ -79,6 +81,7 @@
+   int i;
+ 
+   sched_trace_begin();
++  ets_printf("[HB] @IY0 irq_initialize enter\n");
+ 
+   /* Point all interrupt vectors to the unexpected interrupt */
+ 
+@@ -86,6 +89,7 @@
+     {
+       g_irqvector[i].handler = irq_unexpected_isr;
+     }
++  ets_printf("[HB] @IY1 irq vector loop done\n");
+ 
+ #ifdef CONFIG_IRQCHAIN
+   /* Initialize IRQ chain support */
+@@ -94,6 +98,7 @@
+ #endif
+ 
+   up_irqinitialize();
++  ets_printf("[HB] @IY2 up_irqinitialize returned\n");
+ 
+ #ifdef CONFIG_ARCH_PROTECT_ZERO_ADDRESS
+   up_debugpoint_add(DEBUGPOINT_WATCHPOINT_RW, 0, 0,
+--- a/arch/xtensa/src/esp32s3/esp32s3_irq.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_irq.c
+@@ -461,8 +461,12 @@
+  * Name: up_irqinitialize
+  ****************************************************************************/
+ 
++/* DEBUG-ONLY: ROM heartbeat probes. */
++extern int ets_printf(const char *fmt, ...);
++
+ void up_irqinitialize(void)
+ {
++  ets_printf("[HB] @IX0 up_irqinitialize enter\n");
+   int i;
+ 
+   /* All CPU ints are non-IRAM interrupts at the beginning and should be
+@@ -493,6 +497,7 @@
+   /* Initialize CPU interrupts */
+ 
+   esp32s3_cpuint_initialize();
++  ets_printf("[HB] @IX1 cpuint_initialize done\n");
+ 
+   /* Reserve CPU0 interrupt for some special drivers */
+ 
+@@ -501,24 +506,29 @@
+   g_cpu0_intmap[ESP32S3_CPUINT_PWR] = CPUINT_ASSIGN(ESP32S3_IRQ_PWR);
+   xtensa_enable_cpuint(&per_cpu_var_smp(g_intenable, 0), ESP32S3_CPUINT_MAC);
+ #endif
++  ets_printf("[HB] @IX2 wifi reserve done\n");
+ 
+ #ifdef CONFIG_SMP
+   /* Attach and enable the inter-CPU interrupt */
+ 
+   xtensa_attach_fromcpu1_interrupt();
+ #endif
++  ets_printf("[HB] @IX3 smp intercpu done\n");
+ 
+   /* Initialize GPIO interrupt support */
+ 
+   esp32s3_gpioirqinitialize();
++  ets_printf("[HB] @IX4 gpioirqinitialize done\n");
+ 
+   /* Initialize RTCIO interrupt support */
+ 
+   esp32s3_rtcioirqinitialize();
++  ets_printf("[HB] @IX5 rtcioirqinitialize done\n");
+ 
+   /* Initialize interrupt handler for the PMS violation ISR */
+ 
+   esp32s3_pmsirqinitialize();
++  ets_printf("[HB] @IX6 pmsirqinitialize done\n");
+ 
+ #ifndef CONFIG_SUPPRESS_INTERRUPTS
+   /* And finally, enable interrupts.  Also clears PS.EXCM */
+@@ -526,10 +536,12 @@
+   xtensa_color_intstack();
+   up_irq_enable();
+ #endif
++  ets_printf("[HB] @IX7 irq_enable done\n");
+ 
+   /* Attach the software interrupt */
+ 
+   irq_attach(XTENSA_IRQ_SYSCALL, xtensa_swint, NULL);
++  ets_printf("[HB] @IX8 syscall attach done\n");
+ }
+ 
+ /****************************************************************************
+--- a/arch/xtensa/src/esp32s3/esp32s3_gpio.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_gpio.c
+@@ -370,8 +370,12 @@
+  ****************************************************************************/
+ 
+ #ifdef CONFIG_ESP32S3_GPIO_IRQ
++/* DEBUG-ONLY: ROM heartbeat probes. */
++extern int ets_printf(const char *fmt, ...);
++
+ void esp32s3_gpioirqinitialize(void)
+ {
++  ets_printf("[HB] @IG0 gpioirq enter\n");
+   int cpu;
+ 
+   /* Setup the GPIO interrupt. */
+@@ -380,12 +384,15 @@
+ 
+   g_gpio_cpuint = esp32s3_setup_irq(cpu, ESP32S3_PERIPH_GPIO_INT_CPU, 1,
+                                     ESP32S3_CPUINT_LEVEL);
++  ets_printf("[HB] @IG1 gpio setup_irq ret=%d\n", g_gpio_cpuint);
+   DEBUGASSERT(g_gpio_cpuint >= 0);
+ 
+   /* Attach and enable the interrupt handler */
+ 
+   DEBUGVERIFY(irq_attach(ESP32S3_IRQ_GPIO_INT_CPU, gpio_interrupt, NULL));
++  ets_printf("[HB] @IG2 gpio irq_attach done\n");
+   up_enable_irq(ESP32S3_IRQ_GPIO_INT_CPU);
++  ets_printf("[HB] @IG3 gpio up_enable_irq done\n");
+ }
+ #endif
+ 
+--- a/arch/xtensa/src/esp32s3/esp32s3_rtc_gpio.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_rtc_gpio.c
+@@ -402,19 +402,26 @@
+  ****************************************************************************/
+ 
+ #ifdef CONFIG_ESP32S3_RTCIO_IRQ
++/* DEBUG-ONLY: ROM heartbeat probes. */
++extern int ets_printf(const char *fmt, ...);
++
+ void esp32s3_rtcioirqinitialize(void)
+ {
++  ets_printf("[HB] @IR0 rtcioirq enter\n");
+   /* Setup the RTCIO interrupt. */
+ 
+   int cpu = this_cpu();
+   g_rtcio_cpuint = esp32s3_setup_irq(cpu, ESP32S3_PERIPH_RTC_CORE,
+                                      1, ESP32S3_CPUINT_LEVEL);
++  ets_printf("[HB] @IR1 rtcio setup_irq ret=%d\n", g_rtcio_cpuint);
+   DEBUGASSERT(g_rtcio_cpuint >= 0);
+ 
+   /* Attach and enable the interrupt handler */
+ 
+   DEBUGVERIFY(irq_attach(ESP32S3_IRQ_RTC_CORE, rtcio_interrupt, NULL));
++  ets_printf("[HB] @IR2 rtcio irq_attach done\n");
+   up_enable_irq(ESP32S3_IRQ_RTC_CORE);
++  ets_printf("[HB] @IR3 rtcio up_enable_irq done\n");
+ }
+ #endif
+ 
