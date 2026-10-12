@@ -1,15 +1,8 @@
 Add ROM ets_printf heartbeat probes inside nx_start() and nx_bringup() to
-bisect the silent-boot stop (board reaches '[HB] @F nx_start entering' then
-goes completely silent -- no [APP] from desktop_companion_main, no syslog).
-
-See commit message / prior forensics: entrypoint name is correct
-(-Dmain=desktop_companion_main). Two remaining cause classes:
-  (H1) nx_start() hangs before init task spawn (up_initialize / group_setupidlefiles).
-  (H2) nx_bringup() task_spawn() fails (ret<=0) but DEBUGASSERT is a no-op in
-       release -> kernel silently idles with no app/NSH. @K prints the return.
+bisect the silent-boot stop. Refined 0007: @GA..@GD split the @G->@H gap
+into sched_trace_begin / sinfo / tasklist_initialize / memory_initialize.
 All markers use ROM ets_printf (independent of NuttX serial driver TX).
 Debug-only; revert once the stop is located.
-
 --- a/sched/init/nx_start.c
 +++ b/sched/init/nx_start.c
 @@ -66,6 +66,8 @@
@@ -21,15 +14,26 @@ Debug-only; revert once the stop is located.
  
  /****************************************************************************
   * Public Data
-@@ -763,6 +765,7 @@
+@@ -763,20 +765,26 @@
    /* Boot up is complete */
  
    g_nx_initstate = OSINIT_BOOT;
 +  ets_printf("[HB] @G nx_start top\n");
    sched_trace_begin();
++  ets_printf("[HB] @GA sched_trace_begin done\n");
    sinfo("Entry\n");
++  ets_printf("[HB] @GB sinfo Entry done\n");
  
-@@ -777,6 +780,7 @@
+   /* Head of ready-to-run/assigned task lists valid */
+ 
+   tasklist_initialize();
++  ets_printf("[HB] @GC tasklist_initialize done\n");
+ 
+   /* The memory manager has been initialized */
+ 
+   memory_initialize();
++  ets_printf("[HB] @GD memory_initialize done\n");
+ 
    /* MCU-specific hardware is initialized */
  
    hardware_initialize();
@@ -37,7 +41,7 @@ Debug-only; revert once the stop is located.
  
    /* Setup for Multi-Tasking ************************************************/
  
-@@ -792,6 +796,7 @@
+@@ -792,6 +800,7 @@
     */
  
    DEBUGVERIFY(group_setupidlefiles());
@@ -45,7 +49,7 @@ Debug-only; revert once the stop is located.
  
  #ifdef CONFIG_SMP
    for (i = 1; i < CONFIG_SMP_NCPUS; i++)
-@@ -824,6 +829,7 @@
+@@ -824,6 +833,7 @@
    /* Create initial tasks and bring-up the system */
  
    nx_bringup();
