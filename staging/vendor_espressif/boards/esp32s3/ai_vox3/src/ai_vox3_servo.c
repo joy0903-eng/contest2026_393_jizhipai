@@ -35,6 +35,7 @@
 #include <string.h>
 #include <errno.h>
 #include <syslog.h>
+extern int ets_printf(const char *fmt, ...);
 
 #include <nuttx/timers/pwm.h>
 
@@ -141,14 +142,14 @@ int ai_vox3_servo_initialize(void)
       g_servo_lower[id] = esp32s3_ledc_init(id);
       if (g_servo_lower[id] == NULL)
         {
-          syslog(LOG_ERR, "ERROR: servo %d ledc_init failed\n", id);
+          ets_printf("ERROR: servo %d ledc_init failed\n", id);
           return -ENODEV;
         }
 
       ret = g_servo_lower[id]->ops->setup(g_servo_lower[id]);
       if (ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: servo %d ledc setup failed: %d\n",
+          ets_printf("ERROR: servo %d ledc setup failed: %d\n",
                  id, ret);
           return ret;
         }
@@ -159,7 +160,7 @@ int ai_vox3_servo_initialize(void)
       ret = pwm_register(devpath, g_servo_lower[id]);
       if (ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: servo %d pwm_register failed: %d\n",
+          ets_printf("ERROR: servo %d pwm_register failed: %d\n",
                  id, ret);
           return ret;
         }
@@ -171,13 +172,13 @@ int ai_vox3_servo_initialize(void)
       ret = ai_vox3_servo_set_angle(id, 90);
       if (ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: servo %d park failed: %d\n", id, ret);
+          ets_printf("ERROR: servo %d park failed: %d\n", id, ret);
           return ret;
         }
     }
 
   g_servo_inited = true;
-  syslog(LOG_INFO, "Servo x%d (LEDC 50Hz) initialized\n", BOARD_SERVO_COUNT);
+  ets_printf("Servo x%d (LEDC 50Hz) initialized\n", BOARD_SERVO_COUNT);
   return OK;
 }
 

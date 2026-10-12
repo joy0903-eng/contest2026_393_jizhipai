@@ -117,7 +117,7 @@ int ai_vox3_lcd_initialize(void)
   spi = esp32s3_spibus_initialize(BOARD_LCD_SPI_PORT);
   if (spi == NULL)
     {
-      syslog(LOG_ERR, "ERROR: Failed to initialize FSPI (port %d)\n",
+      ets_printf("ERROR: Failed to initialize FSPI (port %d)\n",
              BOARD_LCD_SPI_PORT);
       return -ENODEV;
     }
@@ -129,11 +129,11 @@ int ai_vox3_lcd_initialize(void)
   ets_printf("[LCD] st7789 done\n");
   if (g_lcddev == NULL)
     {
-      syslog(LOG_ERR, "ERROR: st7789_lcdinitialize failed\n");
+      ets_printf("ERROR: st7789_lcdinitialize failed\n");
       return -ENODEV;
     }
 
-  syslog(LOG_INFO, "LCD (ST7789 240x240) initialized\n");
+  ets_printf("LCD (ST7789 240x240) initialized\n");
   return OK;
 }
 

@@ -81,7 +81,7 @@ int ai_vox3_audio_initialize(void)
   i2c = esp32s3_i2cbus_initialize(BOARD_ES8311_I2C_BUS);
   if (i2c == NULL)
     {
-      syslog(LOG_ERR, "ERROR: Failed to init I2C%d for ES8311\n",
+      ets_printf("ERROR: Failed to init I2C%d for ES8311\n",
              BOARD_ES8311_I2C_BUS);
       return -ENODEV;
     }
@@ -103,7 +103,7 @@ int ai_vox3_audio_initialize(void)
   i2s = esp32s3_i2sbus_initialize(BOARD_ES8311_I2S_PORT);
   if (i2s == NULL)
     {
-      syslog(LOG_ERR, "ERROR: Failed to init I2S%d\n", BOARD_ES8311_I2S_PORT);
+      ets_printf("ERROR: Failed to init I2S%d\n", BOARD_ES8311_I2S_PORT);
       return -ENODEV;
     }
 
@@ -114,7 +114,7 @@ int ai_vox3_audio_initialize(void)
   ets_printf("[AUD] es8311 done\n");
   if (g_audio_codec == NULL)
     {
-      syslog(LOG_ERR, "ERROR: es8311_initialize failed\n");
+      ets_printf("ERROR: es8311_initialize failed\n");
       return -ENODEV;
     }
 
@@ -134,12 +134,12 @@ int ai_vox3_audio_initialize(void)
   ret = audio_register(BOARD_AUDIO_DEV_NAME, g_audio_codec);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: audio_register(\"%s\") failed: %d\n",
+      ets_printf("ERROR: audio_register(\"%s\") failed: %d\n",
              BOARD_AUDIO_DEV_NAME, ret);
       return ret;
     }
 
-  syslog(LOG_INFO, "Audio (ES8311 + I2S) initialized, node /dev/audio/%s\n",
+  ets_printf("Audio (ES8311 + I2S) initialized, node /dev/audio/%s\n",
          BOARD_AUDIO_DEV_NAME);
   return OK;
 }

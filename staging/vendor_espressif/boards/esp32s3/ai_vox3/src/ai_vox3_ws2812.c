@@ -73,6 +73,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <syslog.h>
+extern int ets_printf(const char *fmt, ...);
 
 /* RMT headers -- TWO of them, and this is not optional.
  *
@@ -184,7 +185,7 @@ int ai_vox3_ws2812_initialize(void)
   dev = esp_rmt_tx_init(BOARD_WS2812_RMT_CH, BOARD_WS2812_GPIO);
   if (dev == NULL)
     {
-      syslog(LOG_ERR, "ERROR: WS2812: esp_rmt_tx_init(ch%d, io%d) failed\n",
+      ets_printf("ERROR: WS2812: esp_rmt_tx_init(ch%d, io%d) failed\n",
              BOARD_WS2812_RMT_CH, BOARD_WS2812_GPIO);
       return -ENODEV;
     }
@@ -196,7 +197,7 @@ int ai_vox3_ws2812_initialize(void)
   ret = rmtchar_register(dev);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: WS2812: rmtchar_register failed: %d\n", ret);
+      ets_printf("ERROR: WS2812: rmtchar_register failed: %d\n", ret);
       return ret;
     }
 
@@ -204,12 +205,12 @@ int ai_vox3_ws2812_initialize(void)
   if (g_ws2812_fd < 0)
     {
       ret = -errno;
-      syslog(LOG_ERR, "ERROR: WS2812: open(/dev/rmt0) failed: %d\n", ret);
+      ets_printf("ERROR: WS2812: open(/dev/rmt0) failed: %d\n", ret);
       return ret;
     }
 
   g_ws2812_inited = true;
-  syslog(LOG_INFO, "WS2812 initialized (RMT ch%d, IO%d, /dev/rmt0)\n",
+  ets_printf("WS2812 initialized (RMT ch%d, IO%d, /dev/rmt0)\n",
          BOARD_WS2812_RMT_CH, BOARD_WS2812_GPIO);
   return OK;
 }

@@ -33,6 +33,7 @@
 #include <stdint.h>
 #include <errno.h>
 #include <syslog.h>
+extern int ets_printf(const char *fmt, ...);
 
 #include <nuttx/irq.h>
 #include <nuttx/arch.h>
@@ -127,7 +128,7 @@ int ai_vox3_buttons_initialize(void)
       ret = irq_attach(irq, button_isr, (FAR void *)(uintptr_t)id);
       if (ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: button %d irq_attach failed: %d\n",
+          ets_printf("ERROR: button %d irq_attach failed: %d\n",
                  id, ret);
           return ret;
         }
@@ -137,7 +138,7 @@ int ai_vox3_buttons_initialize(void)
 #endif
     }
 
-  syslog(LOG_INFO, "Buttons x%d initialized\n", AI_VOX3_BTN_COUNT);
+  ets_printf("Buttons x%d initialized\n", AI_VOX3_BTN_COUNT);
   return OK;
 }
 

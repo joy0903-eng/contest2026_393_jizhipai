@@ -22,6 +22,7 @@
 
 #include <errno.h>
 #include <syslog.h>
+extern int ets_printf(const char *fmt, ...);
 
 #include <nuttx/mmcsd.h>
 #include <nuttx/sdio.h>
@@ -72,7 +73,7 @@ int ai_vox3_sd_initialize(void)
   sdio = esp32s3_sdio_initialize(BOARD_SD_SLOT);
   if (sdio == NULL)
     {
-      syslog(LOG_ERR, "ERROR: esp32s3_sdio_initialize(slot %d) failed\n",
+      ets_printf("ERROR: esp32s3_sdio_initialize(slot %d) failed\n",
              BOARD_SD_SLOT);
       return -ENODEV;
     }
@@ -86,7 +87,7 @@ int ai_vox3_sd_initialize(void)
   ret = mmcsd_slotconfig(BOARD_SD_SLOT, &config);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: mmcsd_slotconfig failed: %d\n", ret);
+      ets_printf("ERROR: mmcsd_slotconfig failed: %d\n", ret);
       return ret;
     }
 
@@ -94,10 +95,10 @@ int ai_vox3_sd_initialize(void)
   ret = mmcsd_initialize(0, sdio, &config);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: mmcsd_initialize failed: %d\n", ret);
+      ets_printf("ERROR: mmcsd_initialize failed: %d\n", ret);
       return ret;
     }
 
-  syslog(LOG_INFO, "SD/MMC (1-bit) initialized as /dev/mmcsd0\n");
+  ets_printf("SD/MMC (1-bit) initialized as /dev/mmcsd0\n");
   return OK;
 }
