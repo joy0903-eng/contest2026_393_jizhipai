@@ -145,6 +145,11 @@ CONFIG_LV_USE_BUILTIN_MALLOC=n
 CONFIG_LV_USE_DEMO_WIDGETS=y
 CONFIG_EXAMPLES_LVGLDEMO=y
 CONFIG_EXAMPLES_FB=y
+# OpenVela LVGL v9 NuttX integration: registers an LVGL display from the
+# LCD/framebuffer device (/dev/lcd0).  Without LV_USE_NUTTX the
+# lv_nuttx_init() symbol is not built and the screen can never light.
+CONFIG_LV_USE_NUTTX=y
+CONFIG_LV_USE_NUTTX_LCD=y
 
 # --- Audio: ES8311 + I2S -----------------------------------------------------
 CONFIG_AUDIO=y

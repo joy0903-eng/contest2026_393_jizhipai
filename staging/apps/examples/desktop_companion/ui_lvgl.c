@@ -28,10 +28,6 @@
 #include <stdint.h>
 #include <string.h>
 #include <syslog.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/ioctl.h>
-#include <nuttx/lcd/lcd_dev.h>
 
 #include <lvgl/lvgl.h>
 
@@ -121,32 +117,6 @@ static lv_obj_t *make_read_btn(const char *label, int id)
  * Public Functions
  ****************************************************************************/
 
-/****************************************************************************
- * Name: light_panel_direct
- *
- * Description:
- *   Emergency fallback used during bring-up forensics: if no LVGL display
- *   is registered, push a solid color straight to the LCD panel via
- *   /dev/lcd0 so the user can at least confirm the screen + backlight are
- *   alive.  Not the real UI path -- just a "is the panel wired up?" check.
- ****************************************************************************/
-
-static void light_panel_direct(void)
-{
-  int fd = open("/dev/lcd0", O_WRONLY);
-  if (fd < 0)
-    {
-      ets_printf("[UI] direct: open /dev/lcd0 failed %d\n", fd);
-      return;
-    }
-
-  struct lcddev_fill_s fill;
-  fill.color = 0x07E0;   /* RGB565 green -- clearly non-black */
-
-  int r = ioctl(fd, LCDIOC_FILL, (unsigned long)&fill);
-  ets_printf("[UI] direct: LCDIOC_FILL ret=%d (fd=%d)\n", r, fd);
-  close(fd);
-}
 
 /****************************************************************************
  * Name: ui_init
@@ -155,20 +125,28 @@ static void light_panel_direct(void)
 int ui_init(void)
 {
   ets_printf("[UI] ui_init enter\n");
-  /* The LVGL display + framebuffer are registered by the LVGL integration
-   * (LCD driver + CONFIG_GRAPHICS_LVGL). Verify a display exists. */
-  if (lv_disp_get_default() == NULL)
+
+  lv_init();
+
+  /* Register the LVGL display from the AI-VOX3 ST7789 panel (/dev/lcd0).
+   * OpenVela LVGL v9 ships the NuttX integration (lv_nuttx_init) which opens
+   * the LCD/framebuffer device and registers an LVGL display.  Nothing else
+   * in the BSP does this, so without it lv_disp_get_default() stays NULL and
+   * the screen stays black. */
+  lv_nuttx_dsc_t info;
+  lv_nuttx_result_t result;
+  lv_nuttx_dsc_init(&info);
+  info.fb_path = "/dev/lcd0";
+  lv_nuttx_init(&info, &result);
+
+  if (result.disp == NULL)
     {
-      ets_printf("[UI] WARN no LVGL display registered (lv_disp_get_default NULL)\n");
-      /* Fallback: light the panel directly so the user can confirm the
-       * screen + backlight are alive. */
-      light_panel_direct();
-      syslog(LOG_ERR, "ERROR: ui_init: no LVGL display registered\n");
+      ets_printf("[UI] WARN lv_nuttx_init returned NULL disp\n");
+      syslog(LOG_ERR, "ERROR: ui_init: lv_nuttx_init failed to register display\n");
       return -ENODEV;
     }
 
-  ets_printf("[UI] disp present, lv_init\n");
-  lv_init();
+  ets_printf("[UI] disp registered via lv_nuttx_init\n");
 
   g_screen = lv_obj_create(NULL);
   if (g_screen == NULL)
