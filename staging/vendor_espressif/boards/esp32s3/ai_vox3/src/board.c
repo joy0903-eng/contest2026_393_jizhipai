@@ -110,9 +110,11 @@ int esp_board_initialize(void)
   ets_printf("[BSP] <- wlan_sta_initialize ret=%d\n", ret);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: wlan sta init failed: %d\n", ret);
+      ets_printf("[BSP] ERR wlan sta init: %d\n", ret);
     }
 #endif
+
+  ets_printf("[BSP] past wlan block\n");
 
 #ifdef CONFIG_LCD
   ets_printf("[BSP] -> ai_vox3_lcd_initialize\n");
@@ -120,7 +122,7 @@ int esp_board_initialize(void)
   ets_printf("[BSP] <- ai_vox3_lcd_initialize ret=%d\n", ret);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: LCD init failed: %d\n", ret);
+      ets_printf("[BSP] ERR lcd init: %d\n", ret);
     }
 #endif
 
@@ -130,7 +132,7 @@ int esp_board_initialize(void)
   ets_printf("[BSP] <- ai_vox3_audio_initialize ret=%d\n", ret);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: audio init failed: %d\n", ret);
+      ets_printf("[BSP] ERR audio init: %d\n", ret);
     }
 #endif
 
@@ -140,7 +142,7 @@ int esp_board_initialize(void)
   ets_printf("[BSP] <- ai_vox3_servo_initialize ret=%d\n", ret);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: servo init failed: %d\n", ret);
+      ets_printf("[BSP] ERR servo init: %d\n", ret);
     }
 #endif
 
@@ -150,7 +152,7 @@ int esp_board_initialize(void)
   ets_printf("[BSP] <- ai_vox3_ws2812_initialize ret=%d\n", ret);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: ws2812 init failed: %d\n", ret);
+      ets_printf("[BSP] ERR ws2812 init: %d\n", ret);
     }
 #endif
 
@@ -160,7 +162,7 @@ int esp_board_initialize(void)
   ets_printf("[BSP] <- ai_vox3_buttons_initialize ret=%d\n", ret);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: buttons init failed: %d\n", ret);
+      ets_printf("[BSP] ERR buttons init: %d\n", ret);
     }
 #endif
 
@@ -170,7 +172,7 @@ int esp_board_initialize(void)
   ets_printf("[BSP] <- ai_vox3_sd_initialize ret=%d\n", ret);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: sd init failed: %d\n", ret);
+      ets_printf("[BSP] ERR sd init: %d\n", ret);
     }
 #endif
 
