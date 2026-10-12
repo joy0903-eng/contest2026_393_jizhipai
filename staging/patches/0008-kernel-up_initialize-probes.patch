@@ -1,0 +1,61 @@
+Add ROM ets_printf heartbeat probes inside up_initialize() to bisect the
+silent-boot stop between marker @G (nx_start top) and @H (hardware_initialize
+done). The board reaches @G then goes silent with a DARK screen, so the hang
+is inside up_initialize().
+Debug-only; revert once the stop is located.
+--- a/arch/xtensa/src/common/xtensa_initialize.c
++++ b/arch/xtensa/src/common/xtensa_initialize.c
+@@ -60,6 +60,9 @@
+ 
+ void up_initialize(void)
+ {
++  /* Debug-only ROM heartbeat probes to bisect the silent-boot stop. */
++  extern int ets_printf(const char *fmt, ...);
++  ets_printf("[HB] @U0 up_initialize enter\n");
+ #if XCHAL_CP_NUM > 0
+   xtensa_set_cpenable(CONFIG_XTENSA_CP_INITSET);
+ #endif
+@@ -67,6 +70,7 @@
+   /* Add any extra memory fragments to the memory manager */
+ 
+   xtensa_add_region();
++  ets_printf("[HB] @U1 add_region done\n");
+ 
+ #ifdef CONFIG_PM
+   /* Initialize the power management subsystem.  This MCU-specific function
+@@ -76,6 +80,7 @@
+    */
+ 
+   xtensa_pminitialize();
++  ets_printf("[HB] @U2 pminitialize done\n");
+ #endif
+ 
+ #ifdef CONFIG_ARCH_DMA
+@@ -89,6 +94,7 @@
+     {
+       xtensa_dma_initialize();
+     }
++  ets_printf("[HB] @U3 dma done\n");
+ #endif
+ 
+   /* Initialize the serial device driver */
+@@ -96,14 +102,19 @@
+ #ifdef USE_SERIALDRIVER
+   xtensa_serialinit();
+ #endif
++  ets_printf("[HB] @U4 serialinit done\n");
+ 
+   /* Initialize the network */
+ 
+   xtensa_netinitialize();
++  ets_printf("[HB] @U5 netinit done\n");
+ 
+   /* Initialize USB -- device and/or host */
+ 
++  ets_printf("[HB] @U6 before usbinitialize\n");
+   xtensa_usbinitialize();
++  ets_printf("[HB] @U7 usbinitialize done (rom chan)\n");
+ 
+   board_autoled_on(LED_IRQSENABLED);
++  ets_printf("[HB] @U8 up_initialize exit\n");
+ }
