@@ -192,10 +192,21 @@ int esp_board_initialize(void)
   ets_printf("[BSP] past wlan block\n");
 
 #ifdef CONFIG_LCD
-  /* Register the LCD character device /dev/lcd0.  lcddev_register() calls
-   * board_lcd_initialize() -> ai_vox3_lcd_initialize() (backlight + ST7789),
-   * so we must NOT call ai_vox3_lcd_initialize() directly here (would double
-   * init).  /dev/lcd0 is required by ui_init()'s lv_nuttx_init(fb_path). */
+  /* This NuttX's lcddev_register() only calls board_lcd_getdev() -- it does
+   * NOT call board_lcd_initialize().  So we must initialize the LCD ourselves
+   * (board_lcd_initialize() -> ai_vox3_lcd_initialize() turns on the backlight
+   * and binds the ST7789, setting g_lcddev) BEFORE registering /dev/lcd0.
+   * Reference pattern: esp32s3-box/esp32s3_bringup.c (board_lcd_initialize()
+   * then lcddev_register(0)).  Without this, board_lcd_getdev() returns NULL
+   * and lcddev_register() fails with -ENODEV (-19). */
+  ets_printf("[BSP] -> board_lcd_initialize\n");
+  ret = board_lcd_initialize();
+  ets_printf("[BSP] <- board_lcd_initialize ret=%d\n", ret);
+  if (ret < 0)
+    {
+      ets_printf("[BSP] ERR lcd init: %d\n", ret);
+    }
+
   ets_printf("[BSP] -> lcddev_register(0)\n");
   ret = lcddev_register(0);
   ets_printf("[BSP] <- lcddev_register ret=%d\n", ret);
@@ -255,15 +266,9 @@ int board_app_initialize(uintptr_t arg)
  ****************************************************************************/
 
 #ifdef CONFIG_LCD
-FAR struct lcd_dev_s *board_lcd_initialize(void)
+int board_lcd_initialize(void)
 {
-  int ret = ai_vox3_lcd_initialize();
-  if (ret < 0)
-    {
-      return NULL;
-    }
-
-  return ai_vox3_lcd_getdev(0);
+  return ai_vox3_lcd_initialize();
 }
 
 struct lcd_dev_s *board_lcd_getdev(int lcddev)
