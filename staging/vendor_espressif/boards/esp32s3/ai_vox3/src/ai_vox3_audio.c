@@ -39,6 +39,8 @@
 #include <esp32s3_i2s.h>
 #include <hardware/esp32s3_gpio_sigmap.h>
 
+extern int ets_printf(const char *fmt, ...);
+
 /****************************************************************************
  * Private Data
  ****************************************************************************/
@@ -73,6 +75,8 @@ int ai_vox3_audio_initialize(void)
   struct i2s_dev_s *i2s;
   int ret;
 
+  ets_printf("[AUD] enter\n");
+
   /* --- I2C0: ES8311 control bus (driver routes SCL/SDA itself) --- */
   i2c = esp32s3_i2cbus_initialize(BOARD_ES8311_I2C_BUS);
   if (i2c == NULL)
@@ -81,6 +85,8 @@ int ai_vox3_audio_initialize(void)
              BOARD_ES8311_I2C_BUS);
       return -ENODEV;
     }
+
+  ets_printf("[AUD] i2c ok\n");
 
   /* --- I2S0: route clocks + data via the GPIO matrix ---
    * TX is master: MCLK/BCLK/WS are outputs.  Pin BOARD_ES8311_I2S_DIN is
@@ -93,6 +99,7 @@ int ai_vox3_audio_initialize(void)
   esp32s3_gpio_matrix_out(BOARD_ES8311_I2S_DIN,  I2S0O_SD_OUT_IDX,  false, false);
   esp32s3_gpio_matrix_in(BOARD_ES8311_I2S_DOUT,  I2S0I_SD_IN_IDX,   false);
 
+  ets_printf("[AUD] i2s init\n");
   i2s = esp32s3_i2sbus_initialize(BOARD_ES8311_I2S_PORT);
   if (i2s == NULL)
     {
@@ -100,8 +107,11 @@ int ai_vox3_audio_initialize(void)
       return -ENODEV;
     }
 
+  ets_printf("[AUD] i2s ok\n");
+
   /* --- Bind the ES8311 codec driver (i2c, i2s, persistent lower half) --- */
   g_audio_codec = es8311_initialize(i2c, i2s, &g_es8311_lower);
+  ets_printf("[AUD] es8311 done\n");
   if (g_audio_codec == NULL)
     {
       syslog(LOG_ERR, "ERROR: es8311_initialize failed\n");

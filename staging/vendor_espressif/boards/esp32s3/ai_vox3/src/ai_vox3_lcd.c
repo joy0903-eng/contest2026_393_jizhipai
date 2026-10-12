@@ -39,6 +39,8 @@
 #include <esp32s3_gpio.h>
 #include <esp32s3_spi.h>
 
+extern int ets_printf(const char *fmt, ...);
+
 /****************************************************************************
  * Private Data
  ****************************************************************************/
@@ -101,12 +103,15 @@ int ai_vox3_lcd_initialize(void)
 {
   struct spi_dev_s *spi;
 
+  ets_printf("[LCD] enter\n");
+
   /* Configure DC and BL as GPIO outputs (RST is absent on this board). */
   esp32s3_configgpio(BOARD_LCD_DC_GPIO, OUTPUT);
   esp32s3_configgpio(BOARD_LCD_BL_GPIO, OUTPUT);
 
   /* Turn the backlight on (active high). */
   esp32s3_gpiowrite(BOARD_LCD_BL_GPIO, true);
+  ets_printf("[LCD] backlight on, spibus init\n");
 
   /* Initialize the FSPI bus controller. */
   spi = esp32s3_spibus_initialize(BOARD_LCD_SPI_PORT);
@@ -117,8 +122,11 @@ int ai_vox3_lcd_initialize(void)
       return -ENODEV;
     }
 
+  ets_printf("[LCD] spibus ok, st7789 init\n");
+
   /* Bind the ST7789 driver to the SPI bus. */
   g_lcddev = st7789_lcdinitialize(spi);
+  ets_printf("[LCD] st7789 done\n");
   if (g_lcddev == NULL)
     {
       syslog(LOG_ERR, "ERROR: st7789_lcdinitialize failed\n");

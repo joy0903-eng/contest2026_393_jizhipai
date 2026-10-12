@@ -37,6 +37,8 @@
 void esp32s3_board_initialize(void);
 void xtensa_netinitialize(void);
 
+extern int ets_printf(const char *fmt, ...);
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
@@ -100,12 +102,12 @@ int esp_board_initialize(void)
 {
   int ret = OK;
 
+  ets_printf("[BSP] esp_board_initialize enter\n");
+
 #if defined(CONFIG_ESP32S3_WIFI) && defined(ESP32S3_WLAN_HAS_STA)
-  /* Register the WLAN station netdev.  BOARDIOC_INIT (NSH archinit)
-   * reaches here before the NSH network initialization, so the netdev
-   * exists by the time ifup runs.  ESP32S3_WLAN_HAS_STA is defined by
-   * esp32s3_wifi_adapter.h (pulled in through esp32s3_wlan.h). */
+  ets_printf("[BSP] -> wlan_sta_initialize\n");
   ret = esp32s3_wlan_sta_initialize();
+  ets_printf("[BSP] <- wlan_sta_initialize ret=%d\n", ret);
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: wlan sta init failed: %d\n", ret);
@@ -113,7 +115,9 @@ int esp_board_initialize(void)
 #endif
 
 #ifdef CONFIG_LCD
+  ets_printf("[BSP] -> ai_vox3_lcd_initialize\n");
   ret = ai_vox3_lcd_initialize();
+  ets_printf("[BSP] <- ai_vox3_lcd_initialize ret=%d\n", ret);
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: LCD init failed: %d\n", ret);
@@ -121,7 +125,9 @@ int esp_board_initialize(void)
 #endif
 
 #ifdef CONFIG_AUDIO
+  ets_printf("[BSP] -> ai_vox3_audio_initialize\n");
   ret = ai_vox3_audio_initialize();
+  ets_printf("[BSP] <- ai_vox3_audio_initialize ret=%d\n", ret);
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: audio init failed: %d\n", ret);
@@ -129,7 +135,9 @@ int esp_board_initialize(void)
 #endif
 
 #ifdef CONFIG_AI_VOX3_SERVO
+  ets_printf("[BSP] -> ai_vox3_servo_initialize\n");
   ret = ai_vox3_servo_initialize();
+  ets_printf("[BSP] <- ai_vox3_servo_initialize ret=%d\n", ret);
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: servo init failed: %d\n", ret);
@@ -137,7 +145,9 @@ int esp_board_initialize(void)
 #endif
 
 #ifdef CONFIG_AI_VOX3_WS2812
+  ets_printf("[BSP] -> ai_vox3_ws2812_initialize\n");
   ret = ai_vox3_ws2812_initialize();
+  ets_printf("[BSP] <- ai_vox3_ws2812_initialize ret=%d\n", ret);
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: ws2812 init failed: %d\n", ret);
@@ -145,7 +155,9 @@ int esp_board_initialize(void)
 #endif
 
 #ifdef CONFIG_AI_VOX3_BUTTONS
+  ets_printf("[BSP] -> ai_vox3_buttons_initialize\n");
   ret = ai_vox3_buttons_initialize();
+  ets_printf("[BSP] <- ai_vox3_buttons_initialize ret=%d\n", ret);
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: buttons init failed: %d\n", ret);
@@ -153,13 +165,16 @@ int esp_board_initialize(void)
 #endif
 
 #ifdef CONFIG_MMCSD
+  ets_printf("[BSP] -> ai_vox3_sd_initialize\n");
   ret = ai_vox3_sd_initialize();
+  ets_printf("[BSP] <- ai_vox3_sd_initialize ret=%d\n", ret);
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: sd init failed: %d\n", ret);
     }
 #endif
 
+  ets_printf("[BSP] esp_board_initialize done ret=%d\n", ret);
   return OK;
 }
 
@@ -185,7 +200,10 @@ int board_app_initialize(uintptr_t arg)
    * exactly when NSH needed it -- and a non-matching (int, char**)
    * signature. */
 
-  return esp_board_initialize();
+  ets_printf("[BSP] board_app_initialize enter\n");
+  int r = esp_board_initialize();
+  ets_printf("[BSP] board_app_initialize -> esp_board_initialize ret=%d\n", r);
+  return r;
 }
 #endif /* CONFIG_BOARDCTL */
 
