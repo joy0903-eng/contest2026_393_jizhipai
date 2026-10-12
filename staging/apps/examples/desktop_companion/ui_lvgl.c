@@ -28,8 +28,14 @@
 #include <stdint.h>
 #include <string.h>
 #include <syslog.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <nuttx/lcd/lcd_dev.h>
 
 #include <lvgl/lvgl.h>
+
+extern int ets_printf(const char *fmt, ...);
 
 #include "ui_lvgl.h"
 #include "config.h"
@@ -116,19 +122,52 @@ static lv_obj_t *make_read_btn(const char *label, int id)
  ****************************************************************************/
 
 /****************************************************************************
+ * Name: light_panel_direct
+ *
+ * Description:
+ *   Emergency fallback used during bring-up forensics: if no LVGL display
+ *   is registered, push a solid color straight to the LCD panel via
+ *   /dev/lcd0 so the user can at least confirm the screen + backlight are
+ *   alive.  Not the real UI path -- just a "is the panel wired up?" check.
+ ****************************************************************************/
+
+static void light_panel_direct(void)
+{
+  int fd = open("/dev/lcd0", O_WRONLY);
+  if (fd < 0)
+    {
+      ets_printf("[UI] direct: open /dev/lcd0 failed %d\n", fd);
+      return;
+    }
+
+  struct lcddev_fill_s fill;
+  fill.color = 0x07E0;   /* RGB565 green -- clearly non-black */
+
+  int r = ioctl(fd, LCDIOC_FILL, (unsigned long)&fill);
+  ets_printf("[UI] direct: LCDIOC_FILL ret=%d (fd=%d)\n", r, fd);
+  close(fd);
+}
+
+/****************************************************************************
  * Name: ui_init
  ****************************************************************************/
 
 int ui_init(void)
 {
+  ets_printf("[UI] ui_init enter\n");
   /* The LVGL display + framebuffer are registered by the LVGL integration
    * (LCD driver + CONFIG_GRAPHICS_LVGL). Verify a display exists. */
   if (lv_disp_get_default() == NULL)
     {
+      ets_printf("[UI] WARN no LVGL display registered (lv_disp_get_default NULL)\n");
+      /* Fallback: light the panel directly so the user can confirm the
+       * screen + backlight are alive. */
+      light_panel_direct();
       syslog(LOG_ERR, "ERROR: ui_init: no LVGL display registered\n");
       return -ENODEV;
     }
 
+  ets_printf("[UI] disp present, lv_init\n");
   lv_init();
 
   g_screen = lv_obj_create(NULL);
@@ -201,6 +240,7 @@ int ui_init(void)
 
   g_ui_ready = true;
   ui_set_expression(UI_EXPR_IDLE);
+  ets_printf("[UI] ui_init done OK\n");
   return OK;
 }
 

@@ -743,6 +743,7 @@ int main(int argc, char *argv[])
    * double init is loud in syslog but non-fatal.
    */
   ret = board_app_initialize(0);
+  ets_printf("[UI] board_app_initialize ret=%d\n", ret);
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: board_app_initialize failed: %d\n", ret);
@@ -757,7 +758,9 @@ int main(int argc, char *argv[])
    * black screen with zero error output anywhere -- the user reported it as
    * "the board is dead".  Never let this fail silently again.
    */
+  ets_printf("[UI] calling ui_init\n");
   ret = ui_init();
+  ets_printf("[UI] ui_init ret=%d\n", ret);
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: ui_init failed: %d -- UI will be BLANK\n", ret);
