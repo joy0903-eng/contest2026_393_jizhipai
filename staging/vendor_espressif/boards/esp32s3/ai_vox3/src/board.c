@@ -255,9 +255,15 @@ int board_app_initialize(uintptr_t arg)
  ****************************************************************************/
 
 #ifdef CONFIG_LCD
-int board_lcd_initialize(void)
+FAR struct lcd_dev_s *board_lcd_initialize(void)
 {
-  return ai_vox3_lcd_initialize();
+  int ret = ai_vox3_lcd_initialize();
+  if (ret < 0)
+    {
+      return NULL;
+    }
+
+  return ai_vox3_lcd_getdev(0);
 }
 
 struct lcd_dev_s *board_lcd_getdev(int lcddev)

@@ -47,7 +47,7 @@ static const struct
   lv_color_t  bg;
 } g_expr_style[UI_EXPR_COUNT] =
 {
-  [UI_EXPR_IDLE]   = { ":-)",  LV_COLOR_MAKE(0x10, 0x20, 0x30) },
+  [UI_EXPR_IDLE]   = { ":-)",  LV_COLOR_MAKE(0x1b, 0x3e, 0x74) },
   [UI_EXPR_THINK]  = { ":-?",  LV_COLOR_MAKE(0x20, 0x20, 0x40) },
   [UI_EXPR_HAPPY]  = { ":-D",  LV_COLOR_MAKE(0x10, 0x40, 0x20) },
   [UI_EXPR_SPEAK]  = { ":-O",  LV_COLOR_MAKE(0x30, 0x30, 0x10) },
@@ -107,6 +107,7 @@ static lv_obj_t *make_read_btn(const char *label, int id)
   lv_obj_t *lbl = lv_label_create(btn);
 
   lv_label_set_text(lbl, label);
+  lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
   lv_obj_add_event_cb(btn, read_btn_event, LV_EVENT_CLICKED,
                       (void *)(intptr_t)id);
   lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
@@ -155,6 +156,8 @@ int ui_init(void)
     }
 
   lv_obj_set_size(g_screen, AIVOX3_LCD_WIDTH, AIVOX3_LCD_HEIGHT);
+  lv_obj_set_style_bg_color(g_screen, lv_color_make(0x1b, 0x3e, 0x74), 0);
+  lv_obj_set_style_bg_opa(g_screen, LV_OPA_COVER, 0);
   lv_scr_load(g_screen);
 
   /* Face expression (top area). */
@@ -164,6 +167,7 @@ int ui_init(void)
   lv_obj_align(g_face, LV_ALIGN_TOP_MID, 0, 8);
   lv_obj_set_style_text_font(g_face, LV_FONT_DEFAULT, 0);
   lv_label_set_text(g_face, g_expr_style[UI_EXPR_IDLE].glyph);
+  lv_obj_set_style_text_color(g_face, lv_color_white(), 0);
 
   /* Time card. */
   g_time = lv_label_create(g_screen);
@@ -171,6 +175,7 @@ int ui_init(void)
   lv_label_set_long_mode(g_time, LV_LABEL_LONG_WRAP);
   lv_obj_align(g_time, LV_ALIGN_TOP_MID, 0, 90);
   lv_label_set_text(g_time, "Time: --:--:--");
+  lv_obj_set_style_text_color(g_time, lv_color_white(), 0);
 
   /* Weather card. */
   g_weather = lv_label_create(g_screen);
@@ -178,6 +183,7 @@ int ui_init(void)
   lv_label_set_long_mode(g_weather, LV_LABEL_LONG_WRAP);
   lv_obj_align(g_weather, LV_ALIGN_TOP_MID, 0, 130);
   lv_label_set_text(g_weather, "Weather: --");
+  lv_obj_set_style_text_color(g_weather, lv_color_white(), 0);
 
   /* Todo card. */
   g_todo = lv_label_create(g_screen);
@@ -185,6 +191,7 @@ int ui_init(void)
   lv_label_set_long_mode(g_todo, LV_LABEL_LONG_WRAP);
   lv_obj_align(g_todo, LV_ALIGN_TOP_MID, 0, 165);
   lv_label_set_text(g_todo, "Todo: --");
+  lv_obj_set_style_text_color(g_todo, lv_color_white(), 0);
 
   /* Status line (bottom). */
   g_status = lv_label_create(g_screen);
@@ -192,6 +199,7 @@ int ui_init(void)
   lv_label_set_long_mode(g_status, LV_LABEL_LONG_WRAP);
   lv_obj_align(g_status, LV_ALIGN_BOTTOM_MID, 0, -6);
   lv_label_set_text(g_status, "AI-VOX3 ready");
+  lv_obj_set_style_text_color(g_status, lv_color_white(), 0);
 
   /* --- Reading (audiobook) controls --- */
   g_read_info = lv_label_create(g_screen);
@@ -199,6 +207,7 @@ int ui_init(void)
   lv_label_set_long_mode(g_read_info, LV_LABEL_LONG_WRAP);
   lv_obj_align(g_read_info, LV_ALIGN_BOTTOM_MID, 0, -22);
   lv_label_set_text(g_read_info, "");
+  lv_obj_set_style_text_color(g_read_info, lv_color_white(), 0);
   lv_obj_add_flag(g_read_info, LV_OBJ_FLAG_HIDDEN);
 
   g_read_start = make_read_btn("READ", UI_BTN_READ_START);
