@@ -111,6 +111,7 @@ CONFIG_SYSLOG_CONSOLE=y
 
 # --- LCD: ST7789 240x240 (FSPI) + LVGL --------------------------------------
 CONFIG_LCD=y
+CONFIG_LCD_DEV=y
 CONFIG_LCD_ST7789=y
 # drivers/lcd/st7789.c #errors out without SPI command/data mode (run#21).
 CONFIG_SPI=y

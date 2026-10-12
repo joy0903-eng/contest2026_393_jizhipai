@@ -18,6 +18,8 @@
 #include <nuttx/board.h>
 #include <nuttx/lcd/lcd.h>
 #include <nuttx/arch.h>
+#include <nuttx/kthread.h>
+#include <nuttx/lcd/lcd_dev.h>
 
 #include <stdint.h>
 
@@ -98,33 +100,24 @@ void xtensa_netinitialize(void)
  *
  ****************************************************************************/
 
-int esp_board_initialize(void)
+/****************************************************************************
+ * Name: periph_init_entry
+ *
+ * Description:
+ *   Background kernel thread that brings up the non-essential peripherals
+ *   (audio / servo / ws2812 / buttons / sd).  Run asynchronously so that a
+ *   hang or failure here can NEVER block board_app_initialize() and delay the
+ *   UI bring-up -- e.g. the RMT/ws2812 init was observed to hang and would
+ *   otherwise stall the whole bring-up, leaving the screen dark.  ui_init()
+ *   runs as soon as esp_board_initialize() returns to the caller.
+ *
+ ****************************************************************************/
+
+static int periph_init_entry(int argc, char *argv[])
 {
-  int ret = OK;
+  int ret;
 
-  ets_printf("[BSP] esp_board_initialize enter\n");
-
-#if defined(CONFIG_ESP32S3_WIFI) && defined(ESP32S3_WLAN_HAS_STA)
-  ets_printf("[BSP] -> wlan_sta_initialize\n");
-  ret = esp32s3_wlan_sta_initialize();
-  ets_printf("[BSP] <- wlan_sta_initialize ret=%d\n", ret);
-  if (ret < 0)
-    {
-      ets_printf("[BSP] ERR wlan sta init: %d\n", ret);
-    }
-#endif
-
-  ets_printf("[BSP] past wlan block\n");
-
-#ifdef CONFIG_LCD
-  ets_printf("[BSP] -> ai_vox3_lcd_initialize\n");
-  ret = ai_vox3_lcd_initialize();
-  ets_printf("[BSP] <- ai_vox3_lcd_initialize ret=%d\n", ret);
-  if (ret < 0)
-    {
-      ets_printf("[BSP] ERR lcd init: %d\n", ret);
-    }
-#endif
+  ets_printf("[BSP] periph thread start\n");
 
 #ifdef CONFIG_AUDIO
   ets_printf("[BSP] -> ai_vox3_audio_initialize\n");
@@ -175,6 +168,50 @@ int esp_board_initialize(void)
       ets_printf("[BSP] ERR sd init: %d\n", ret);
     }
 #endif
+
+  ets_printf("[BSP] periph thread done\n");
+  return 0;
+}
+
+int esp_board_initialize(void)
+{
+  int ret = OK;
+
+  ets_printf("[BSP] esp_board_initialize enter\n");
+
+#if defined(CONFIG_ESP32S3_WIFI) && defined(ESP32S3_WLAN_HAS_STA)
+  ets_printf("[BSP] -> wlan_sta_initialize\n");
+  ret = esp32s3_wlan_sta_initialize();
+  ets_printf("[BSP] <- wlan_sta_initialize ret=%d\n", ret);
+  if (ret < 0)
+    {
+      ets_printf("[BSP] ERR wlan sta init: %d\n", ret);
+    }
+#endif
+
+  ets_printf("[BSP] past wlan block\n");
+
+#ifdef CONFIG_LCD
+  /* Register the LCD character device /dev/lcd0.  lcddev_register() calls
+   * board_lcd_initialize() -> ai_vox3_lcd_initialize() (backlight + ST7789),
+   * so we must NOT call ai_vox3_lcd_initialize() directly here (would double
+   * init).  /dev/lcd0 is required by ui_init()'s lv_nuttx_init(fb_path). */
+  ets_printf("[BSP] -> lcddev_register(0)\n");
+  ret = lcddev_register(0);
+  ets_printf("[BSP] <- lcddev_register ret=%d\n", ret);
+  if (ret < 0)
+    {
+      ets_printf("[BSP] ERR lcd register: %d\n", ret);
+    }
+#endif
+
+  /* Bring up the non-essential peripherals (audio/servo/ws2812/buttons/sd)
+   * in a BACKGROUND kernel thread (see periph_init_entry).  These are needed
+   * for the voice/servo product features but MUST NOT block
+   * board_app_initialize()/ui_init(): a hang in e.g. the RMT/ws2812 init
+   * would otherwise stall bring-up and keep the screen dark.  ui_init() runs
+   * as soon as we return from this function. */
+  kthread_create("periph", 50, 8192, periph_init_entry, NULL);
 
   ets_printf("[BSP] esp_board_initialize done ret=%d\n", ret);
   return OK;
