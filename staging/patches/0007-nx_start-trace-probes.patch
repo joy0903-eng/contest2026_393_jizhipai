@@ -1,7 +1,7 @@
-Add ROM ets_printf heartbeat probes inside nx_start() and nx_bringup() to
-bisect the silent-boot stop. Refined 0007: @GA..@GD split the @G->@H gap
-into sched_trace_begin / sinfo / tasklist_initialize / memory_initialize.
-All markers use ROM ets_printf (independent of NuttX serial driver TX).
+Add ROM ets_printf heartbeat probes to bisect the silent-boot stop.
+nx_start(): @G/@GA/@GB/@GC/@GD split @G->hardware_initialize();
+hardware_initialize(): @HW0..@HW10 split each subsystem call; @H after return.
+nx_bringup(): @K prints init task_spawn ret. All use ROM ets_printf.
 Debug-only; revert once the stop is located.
 --- a/sched/init/nx_start.c
 +++ b/sched/init/nx_start.c
@@ -14,7 +14,67 @@ Debug-only; revert once the stop is located.
  
  /****************************************************************************
   * Public Data
-@@ -763,20 +765,26 @@
+@@ -659,48 +661,59 @@
+ {
+   /* Initialize tasking data structures */
+ 
++  ets_printf("[HB] @HW0 hardware_initialize entry\n");
+   task_initialize();
++  ets_printf("[HB] @HW1 task_initialize done\n");
+ 
+   /* Initialize the instrument function */
+ 
+   instrument_initialize();
++  ets_printf("[HB] @HW2 instrument_initialize done\n");
+ 
+   /* Initialize the file system (needed to support device drivers) */
+ 
+   fs_initialize();
++  ets_printf("[HB] @HW3 fs_initialize done\n");
+ 
+   /* Initialize the interrupt handling subsystem (if included) */
+ 
+   irq_initialize();
++  ets_printf("[HB] @HW4 irq_initialize done\n");
+ 
+   /* Initialize the POSIX timer facility (if included in the link) */
+ 
+   clock_initialize();
++  ets_printf("[HB] @HW5 clock_initialize done\n");
+ 
+ #ifndef CONFIG_DISABLE_POSIX_TIMERS
+   timer_initialize();
++  ets_printf("[HB] @HW6 timer_initialize done\n");
+ #endif
+ 
+   /* Initialize the signal facility (if in link) */
+ 
+   nxsig_initialize();
++  ets_printf("[HB] @HW7 nxsig_initialize done\n");
+ 
+ #if !defined(CONFIG_DISABLE_MQUEUE) || !defined(CONFIG_DISABLE_MQUEUE_SYSV)
+   /* Initialize the named message queue facility (if in link) */
+ 
+   nxmq_initialize();
++  ets_printf("[HB] @HW8 nxmq_initialize done\n");
+ #endif
+ 
+ #ifdef CONFIG_NET
+   /* Initialize the networking system */
+ 
+   net_initialize();
++  ets_printf("[HB] @HW9 net_initialize done\n");
+ #endif
+ 
+ #ifndef CONFIG_BINFMT_DISABLE
+   /* Initialize the binfmt system */
+ 
+   binfmt_initialize();
++  ets_printf("[HB] @HW10 binfmt_initialize done\n");
+ #endif
+ 
+   /* Initialize Hardware Facilities *****************************************/
+@@ -763,20 +776,26 @@
    /* Boot up is complete */
  
    g_nx_initstate = OSINIT_BOOT;
@@ -41,7 +101,7 @@ Debug-only; revert once the stop is located.
  
    /* Setup for Multi-Tasking ************************************************/
  
-@@ -792,6 +800,7 @@
+@@ -792,6 +811,7 @@
     */
  
    DEBUGVERIFY(group_setupidlefiles());
@@ -49,7 +109,7 @@ Debug-only; revert once the stop is located.
  
  #ifdef CONFIG_SMP
    for (i = 1; i < CONFIG_SMP_NCPUS; i++)
-@@ -824,6 +833,7 @@
+@@ -824,6 +844,7 @@
    /* Create initial tasks and bring-up the system */
  
    nx_bringup();
