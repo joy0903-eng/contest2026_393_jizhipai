@@ -158,12 +158,26 @@ static void my_lcd_flush(lv_display_t *disp, const lv_area_t *area,
                          uint8_t *color_p)
 {
   static bool s_first = true;
+  static struct lcd_planeinfo_s s_pinfo;
+  static bool s_pinfo_ready = false;
   struct lcd_dev_s *lcd = ai_vox3_lcd_getdev(0);
 
   if (lcd == NULL)
     {
       lv_display_flush_ready(disp);
       return;
+    }
+
+  /* putarea() lives on the LCD plane info, NOT on lcd_dev_s.  Fetch it once. */
+  if (!s_pinfo_ready)
+    {
+      if (lcd->getplaneinfo(lcd, 0, &s_pinfo) != OK)
+        {
+          lv_display_flush_ready(disp);
+          return;
+        }
+
+      s_pinfo_ready = true;
     }
 
   int w = area->x2 - area->x1 + 1;
@@ -179,7 +193,8 @@ static void my_lcd_flush(lv_display_t *disp, const lv_area_t *area,
   /* One contiguous RGB565 buffer for the whole area (PARTIAL mode keeps h
    * small -- a handful of rows -- so this is a few KB).  If it cannot be
    * allocated (e.g. a surprise full-frame flush), fall back to row-by-row
-   * with a tiny per-row buffer. */
+   * with a tiny per-row buffer.  lv_color_to_u16() converts from whatever
+   * LVGL's internal colour depth is to RGB565 -- correct for this panel. */
   lv_color_t *src = (lv_color_t *)color_p;
   uint16_t *buf = (uint16_t *)malloc((size_t)w * (size_t)h * 2);
 
@@ -187,11 +202,11 @@ static void my_lcd_flush(lv_display_t *disp, const lv_area_t *area,
     {
       for (int i = 0; i < w * h; i++)
         {
-          buf[i] = lv_color_to16(src[i]).full;   /* -> RGB565 */
+          buf[i] = lv_color_to_u16(src[i]);   /* -> RGB565 */
         }
 
-      lcd->putarea(lcd, area->y1, area->y2, area->x1, area->x2,
-                   (uint8_t *)buf, (fb_coord_t)(w * 2));
+      s_pinfo.putarea(lcd, area->y1, area->y2, area->x1, area->x2,
+                      (uint8_t *)buf, (fb_coord_t)(w * 2));
       free(buf);
     }
   else
@@ -207,11 +222,11 @@ static void my_lcd_flush(lv_display_t *disp, const lv_area_t *area,
         {
           for (int x = 0; x < w; x++)
             {
-              row[x] = lv_color_to16(src[y * w + x]).full;
+              row[x] = lv_color_to_u16(src[y * w + x]);
             }
 
-          lcd->putarea(lcd, area->y1 + y, area->y1 + y, area->x1, area->x2,
-                       (uint8_t *)row, (fb_coord_t)(w * 2));
+          s_pinfo.putarea(lcd, area->y1 + y, area->y1 + y, area->x1,
+                          area->x2, (uint8_t *)row, (fb_coord_t)(w * 2));
         }
 
       free(row);
@@ -241,6 +256,7 @@ static void ui_smoke_test(void)
 {
   struct lcd_dev_s      *lcd = ai_vox3_lcd_getdev(0);
   struct fb_videoinfo_s  vinfo;
+  struct lcd_planeinfo_s pinfo;
   int ret;
 
   if (lcd == NULL)
@@ -255,6 +271,14 @@ static void ui_smoke_test(void)
 
   ret = lcd->setpower(lcd, 0xff);   /* LCD_FULL_ON */
   ets_printf("[SMOKE] setpower(0xff) ret=%d\n", ret);
+
+  ret = lcd->getplaneinfo(lcd, 0, &pinfo);
+  ets_printf("[SMOKE] getplaneinfo ret=%d bpp=%d\n", ret, (int)pinfo.bpp);
+  if (ret != OK)
+    {
+      ets_printf("[SMOKE] getplaneinfo failed; cannot paint\n");
+      return;
+    }
 
   int w = (int)(vinfo.xres ? vinfo.xres : AIVOX3_LCD_WIDTH);
   int h = (int)(vinfo.yres ? vinfo.yres : AIVOX3_LCD_HEIGHT);
@@ -280,8 +304,8 @@ static void ui_smoke_test(void)
           y2 = h - 1;
         }
 
-      lcd->putarea(lcd, y, y2, 0, w - 1,
-                   (uint8_t *)buf, (fb_coord_t)(w * 2));
+      ret = pinfo.putarea(lcd, y, y2, 0, w - 1,
+                          (uint8_t *)buf, (fb_coord_t)(w * 2));
     }
 
   free(buf);
