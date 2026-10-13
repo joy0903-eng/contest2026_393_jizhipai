@@ -154,9 +154,22 @@ static lv_obj_t *make_read_btn(const char *label, int id)
  * driver's putarea().  lv_display_flush_ready() is always called so LVGL keeps
  * rendering.
  * ------------------------------------------------------------------------- */
+/* Gate: while false the callback is a no-op (just releases LVGL's flush
+ * semaphore) so the port's mandatory initial flush during
+ * lv_display_set_buffers() cannot dead-lock the boot.  ui_init() flips it
+ * true once the LCD and LVGL screen are fully set up, after which the real
+ * paint path (pinfo.putarea) runs from the main loop's ui_refresh(). */
+static bool g_flush_live = false;
+
 static void my_lcd_flush(lv_display_t *disp, const lv_area_t *area,
                          uint8_t *color_p)
 {
+  if (!g_flush_live)
+    {
+      lv_display_flush_ready(disp);
+      return;
+    }
+
   static bool s_first = true;
   static struct lcd_planeinfo_s s_pinfo;
   static bool s_pinfo_ready = false;
@@ -466,6 +479,7 @@ int ui_init(void)
   g_ui_ready = true;
   ui_set_expression(UI_EXPR_IDLE);
   ets_printf("[UI] ui_init done OK\n");
+  g_flush_live = true;   /* open the real paint path for the main loop */
   return OK;
 }
 
