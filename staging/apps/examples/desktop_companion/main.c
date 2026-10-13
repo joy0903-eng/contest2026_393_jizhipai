@@ -52,7 +52,6 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-#include <pthread.h>
 #include <syslog.h>
 
 #include <arch/board/board.h>
@@ -719,81 +718,6 @@ static int do_bridge_turn(void)
  * Name: main (desktop_companion)
  ****************************************************************************/
 
-/****************************************************************************
- * Name: bringup_task
- *
- * Background bring-up of the (best-effort) subsystems: network, audio, mic,
- * keyword spotting, voice bridge.  Runs in its OWN thread so that a wedged
- * subsystem can NEVER freeze the LVGL UI loop.
- *
- * Why this matters: the BSP reports `wlan_sta_initialize ret=-12`, i.e. the
- * Wi-Fi STA driver failed to initialise.  net_init() -> wifi_associate() then
- * blocks forever waiting on a completion event that never fires.  With the old
- * code that call sat on the critical path BEFORE the main while(1) loop, so the
- * screen stayed red (the forced ui_init render had already painted, but no
- * further refresh ran) and nothing in the loop ever executed.  Running it here
- * keeps the UI live regardless.
- *
- * Everything is best-effort: failures are logged to syslog and the loop keeps
- * running.  The UI screen itself is already painted and refreshing by the time
- * this thread starts.
- ****************************************************************************/
-
-static void *bringup_task(void *arg)
-{
-  (void)arg;
-
-  ets_printf("[MAIN] bringup: net_init\n");
-  net_init();
-  ets_printf("[MAIN] bringup: net_init done\n");
-
-  ets_printf("[MAIN] bringup: audio_init\n");
-  audio_init();
-  ets_printf("[MAIN] bringup: audio_init done\n");
-
-  ets_printf("[MAIN] bringup: face_follow_enable\n");
-  face_follow_enable(true);
-  ets_printf("[MAIN] bringup: face_follow done\n");
-
-  ets_printf("[MAIN] bringup: board btn cb\n");
-  ai_vox3_buttons_register_callback(btn_callback);
-  ets_printf("[MAIN] bringup: board btn cb done\n");
-
-  if (net_wait_linked(2000))
-    {
-      net_ntp_sync();
-    }
-  else
-    {
-      syslog(LOG_WARNING, "WARNING: no IPv4 on wlan0 after 2 s; the voice "
-             "bridge will be unreachable until Wi-Fi comes up\n");
-    }
-  ets_printf("[MAIN] bringup: net link check done\n");
-
-  kws_init();
-  int r = kws_load(NULL);
-  if (r < 0)
-    {
-      syslog(LOG_WARNING, "kws_load: %d (no wake-word templates; every "
-             "utterance goes straight to the PC bridge)\n", r);
-    }
-  else
-    {
-      syslog(LOG_INFO, "kws: template bank loaded\n");
-    }
-  ets_printf("[MAIN] bringup: kws done\n");
-
-  bridge_turn_result_init(&g_result);
-  ensure_utterance_buffer();
-  rearm_mic();
-  ets_printf("[MAIN] bringup: rearm_mic done\n");
-
-  ui_set_expression(UI_EXPR_IDLE);
-  set_status("Standby -- talk to me");
-  ets_printf("[MAIN] bringup: complete\n");
-  return NULL;
-}
-
 int main(int argc, char *argv[])
 {
   char line[SERIAL_LINE_MAX];
@@ -847,31 +771,51 @@ int main(int argc, char *argv[])
   ui_set_button_callback(read_ui_button);
   ets_printf("[MAIN] ui button cb set\n");
 
-  /* Decouple bring-up from the UI loop.  The LVGL screen is already painted
-   * and live at this point (ui_init forced a first render, and g_ui_ready is
-   * true).  Run the potentially-blocking network/audio/mic bring-up in a
-   * background thread so a wedged subsystem (e.g. wifi_associate hanging
-   * because wlan_sta_initialize failed with -12) can NEVER freeze the UI.
-   * Everything in the thread is best-effort; the loop below keeps the screen
-   * refreshed regardless.  Fall back to inline execution only if the thread
-   * cannot be created. */
-  ets_printf("[MAIN] starting background bring-up thread\n");
-  pthread_t bt;
-  pthread_attr_t attr;
-  pthread_attr_init(&attr);
-  pthread_attr_setstacksize(&attr, 16384);   /* net_init/audio_init need room */
-  if (pthread_create(&bt, &attr, bringup_task, NULL) != 0)
+  net_init();
+  ets_printf("[MAIN] net_init done\n");
+  audio_init();
+  ets_printf("[MAIN] audio_init done\n");
+  face_follow_enable(true);
+  ets_printf("[MAIN] face_follow done\n");
+  ai_vox3_buttons_register_callback(btn_callback);
+  ets_printf("[MAIN] board btn cb done\n");
+
+  /* Try to bring up the network + time if possible (best effort). */
+  if (net_wait_linked(2000))
     {
-      syslog(LOG_ERR, "ERROR: failed to spawn bring-up thread; running "
-             "bring-up inline (UI may freeze if a subsystem hangs)\n");
-      bringup_task(NULL);
+      net_ntp_sync();
     }
   else
     {
-      pthread_detach(bt);
+      syslog(LOG_WARNING, "WARNING: no IPv4 on wlan0 after 2 s; the voice "
+             "bridge will be unreachable until Wi-Fi comes up\n");
     }
-  pthread_attr_destroy(&attr);
-  ets_printf("[MAIN] entering main loop (UI live)\n");
+  ets_printf("[MAIN] net link check done\n");
+
+  /* Offline keyword spotting is a bonus, never a blocker: with no loaded
+   * template bank every detected utterance simply goes to the PC.
+   */
+  kws_init();
+  ret = kws_load(NULL);
+  if (ret < 0)
+    {
+      syslog(LOG_WARNING, "kws_load: %d (no wake-word templates; every "
+             "utterance goes straight to the PC bridge)\n", ret);
+    }
+  else
+    {
+      syslog(LOG_INFO, "kws: template bank loaded\n");
+    }
+  ets_printf("[MAIN] kws done\n");
+
+  bridge_turn_result_init(&g_result);
+  ensure_utterance_buffer();
+  rearm_mic();
+  ets_printf("[MAIN] rearm_mic done\n");
+
+  ui_set_expression(UI_EXPR_IDLE);
+  set_status("Standby -- talk to me");
+  ets_printf("[MAIN] entering main loop\n");
 
   /* --- Main loop --- */
   while (1)
