@@ -388,9 +388,20 @@ int ui_init(void)
    * partial buffer (a few rows) that comfortably fits internal RAM and switch
    * to PARTIAL render mode; LVGL then flushes the screen band-by-band over
    * SPI.  (A later cleanup can enable PSRAM for a full-frame buffer.) */
-  static lv_color_t g_lv_buf[240 * 20];   /* 240 px wide x 20 rows = 9600 B */
+  static lv_color_t g_lv_buf[240 * 20] __attribute__((aligned(32)));
+                                     /* 240 px wide x 20 rows; aligned for LVGL */
   ets_printf("[UI] >> set_buffers buf=%p size=%u\n",
              (void *)g_lv_buf, (unsigned)sizeof(g_lv_buf));
+  /* Ensure LVGL's draw-buffer helper callbacks (width_to_stride_cb /
+   * align_pointer_cb) are installed.  If they are not, lv_display_set_buffers
+   * computes stride = 0 and then divides buf_size by 0 -> CPU exception that
+   * silently halts the boot right here (no flush, no return).  lv_init() does
+   * not always initialise them on this port, so do it explicitly. */
+  lv_draw_buf_init_handlers();
+  ets_printf("[UI] disp res w=%d h=%d cf=%d\n",
+             (int)lv_display_get_horizontal_resolution(result.disp),
+             (int)lv_display_get_vertical_resolution(result.disp),
+             (int)lv_display_get_color_format(result.disp));
   lv_display_set_buffers(result.disp, g_lv_buf, NULL,
                          sizeof(g_lv_buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
   ets_printf("[UI] << set_buffers returned\n");
