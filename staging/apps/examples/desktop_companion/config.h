@@ -147,7 +147,7 @@ extern "C"
  ****************************************************************************/
 
 #define AIVOX3_LCD_WIDTH       240
-#define AIVOX3_LCD_HEIGHT      240
+#define AIVOX3_LCD_HEIGHT      320
 
 /****************************************************************************
  * Servo / face-follow mapping (application view; BSP owns the GPIOs)

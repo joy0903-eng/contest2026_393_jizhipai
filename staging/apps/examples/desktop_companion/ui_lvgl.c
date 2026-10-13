@@ -367,6 +367,23 @@ int ui_init(void)
 
   ets_printf("[UI] disp registered via lv_nuttx_init\n");
 
+  /* FIX (root cause of the boot hang): OpenVela's lv_nuttx_init() registers the
+   * LVGL display but never propagates the LCD panel geometry, so disp->hor_res /
+   * disp->ver_res stay at 0.  lv_display_set_buffers() in PARTIAL render mode
+   * computes stride = lv_draw_buf_width_to_stride(w, cf) and then h = buf_size /
+   * stride.  With w == 0 the stride is also 0, so it divides by zero and the CPU
+   * faults -> the call never returns and the panel stays blank.  (lv_init(),
+   * called above, DOES install the draw-buffer handlers, so the only missing
+   * piece is the resolution.)  Pin the real panel geometry (240x320, per LCD
+   * getvideoinfo) and the colour format (RGB888, matching this build's 3-byte
+   * lv_color_t) before setting the draw buffer. */
+  lv_display_set_resolution(result.disp, AIVOX3_LCD_WIDTH, AIVOX3_LCD_HEIGHT);
+  lv_display_set_color_format(result.disp, LV_COLOR_FORMAT_RGB888);
+  ets_printf("[UI] disp res w=%d h=%d cf=%d\n",
+             (int)lv_display_get_horizontal_resolution(result.disp),
+             (int)lv_display_get_vertical_resolution(result.disp),
+             (int)lv_display_get_color_format(result.disp));
+
   /* Install OUR custom flush callback BEFORE setting the draw buffer.  The
    * OpenVela LVGL port performs a mandatory initial flush while
    * lv_display_set_buffers() runs, and its built-in flush callback is broken on
@@ -392,16 +409,6 @@ int ui_init(void)
                                      /* 240 px wide x 20 rows; aligned for LVGL */
   ets_printf("[UI] >> set_buffers buf=%p size=%u\n",
              (void *)g_lv_buf, (unsigned)sizeof(g_lv_buf));
-  /* Ensure LVGL's draw-buffer helper callbacks (width_to_stride_cb /
-   * align_pointer_cb) are installed.  If they are not, lv_display_set_buffers
-   * computes stride = 0 and then divides buf_size by 0 -> CPU exception that
-   * silently halts the boot right here (no flush, no return).  lv_init() does
-   * not always initialise them on this port, so do it explicitly. */
-  lv_draw_buf_init_handlers();
-  ets_printf("[UI] disp res w=%d h=%d cf=%d\n",
-             (int)lv_display_get_horizontal_resolution(result.disp),
-             (int)lv_display_get_vertical_resolution(result.disp),
-             (int)lv_display_get_color_format(result.disp));
   lv_display_set_buffers(result.disp, g_lv_buf, NULL,
                          sizeof(g_lv_buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
   ets_printf("[UI] << set_buffers returned\n");
