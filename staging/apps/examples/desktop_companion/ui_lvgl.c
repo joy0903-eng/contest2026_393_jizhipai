@@ -501,6 +501,24 @@ int ui_init(void)
   ui_set_expression(UI_EXPR_IDLE);
   ets_printf("[UI] ui_init done OK\n");
   g_flush_live = true;   /* open the real paint path for the main loop */
+
+  /* ---- HARD DIAGNOSTIC + immediate paint ---------------------------------
+   * Force one synchronous LVGL render right here, BEFORE returning to main().
+   * This partitions the "why is the screen red, not blue" problem:
+   *   - If "[FLUSH]" appears below -> the LVGL flush / display plumbing is
+   *     correct.  The blue UI will now also visibly paint over the red, and
+   *     any remaining fault is the main loop never reaching ui_refresh()
+   *     (some setup call after ui_init -- audio_init / rearm_mic / etc --
+   *     blocks indefinitely before the while(1) loop starts).
+   *   - If "[FLUSH]" does NOT appear -> the display config itself is broken
+   *     (no default display / no refresh timer / colour-format mismatch).
+   * ---------------------------------------------------------------------- */
+  ets_printf("[UI] forcing first lv_timer_handler() (g_flush_live=%d)\n",
+             g_flush_live);
+  lv_tick_inc((uint32_t)AIVOX3_LOOP_TICK_MS);
+  lv_timer_handler();
+  ets_printf("[UI] first lv_timer_handler() returned\n");
+
   return OK;
 }
 

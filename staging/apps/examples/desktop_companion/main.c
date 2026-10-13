@@ -769,11 +769,16 @@ int main(int argc, char *argv[])
   /* Wire the LVGL reading buttons (start / pause / resume / next / stop) to the
    * same request-latch pattern used by the hardware buttons. */
   ui_set_button_callback(read_ui_button);
+  ets_printf("[MAIN] ui button cb set\n");
 
   net_init();
+  ets_printf("[MAIN] net_init done\n");
   audio_init();
+  ets_printf("[MAIN] audio_init done\n");
   face_follow_enable(true);
+  ets_printf("[MAIN] face_follow done\n");
   ai_vox3_buttons_register_callback(btn_callback);
+  ets_printf("[MAIN] board btn cb done\n");
 
   /* Try to bring up the network + time if possible (best effort). */
   if (net_wait_linked(2000))
@@ -785,6 +790,7 @@ int main(int argc, char *argv[])
       syslog(LOG_WARNING, "WARNING: no IPv4 on wlan0 after 2 s; the voice "
              "bridge will be unreachable until Wi-Fi comes up\n");
     }
+  ets_printf("[MAIN] net link check done\n");
 
   /* Offline keyword spotting is a bonus, never a blocker: with no loaded
    * template bank every detected utterance simply goes to the PC.
@@ -800,13 +806,16 @@ int main(int argc, char *argv[])
     {
       syslog(LOG_INFO, "kws: template bank loaded\n");
     }
+  ets_printf("[MAIN] kws done\n");
 
   bridge_turn_result_init(&g_result);
   ensure_utterance_buffer();
   rearm_mic();
+  ets_printf("[MAIN] rearm_mic done\n");
 
   ui_set_expression(UI_EXPR_IDLE);
   set_status("Standby -- talk to me");
+  ets_printf("[MAIN] entering main loop\n");
 
   /* --- Main loop --- */
   while (1)
@@ -1292,6 +1301,8 @@ int main(int argc, char *argv[])
 
       /* Drive face-follow demo + LVGL. */
       face_follow_demo_tick();
+      if ((loop % 40) == 0)
+        ets_printf("[LOOP] iter=%d state=%d -> ui_refresh\n", loop, g_state);
       ui_refresh();
 
       usleep(AIVOX3_LOOP_TICK_MS * 1000);
