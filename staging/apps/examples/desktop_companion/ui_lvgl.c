@@ -152,8 +152,8 @@ static void ui_smoke_test(void)
     }
 
   ret = lcd->getvideoinfo(lcd, &vinfo);
-  ets_printf("[SMOKE] getvideoinfo ret=%d xres=%d yres=%d bpp=%d\n",
-             ret, (int)vinfo.xres, (int)vinfo.yres, (int)vinfo.bpp);
+  ets_printf("[SMOKE] getvideoinfo ret=%d xres=%d yres=%d\n",
+             ret, (int)vinfo.xres, (int)vinfo.yres);
 
   ret = lcd->setpower(lcd, 0xff);   /* LCD_FULL_ON */
   ets_printf("[SMOKE] setpower(0xff) ret=%d\n", ret);
