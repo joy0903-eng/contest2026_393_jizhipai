@@ -138,11 +138,109 @@ static lv_obj_t *make_read_btn(const char *label, int id)
  *     WHITE -> even the raw putarea failed (panel asleep / SPI / wiring)
  ****************************************************************************/
 
+/* ---------------------------------------------------------------------------
+ * Name: my_lcd_flush
+ *
+ * Custom LVGL display flush for the AI-VOX3 ST7789 panel.  We deliberately
+ * BYPASS the OpenVela LVGL/NuttX LCD port's built-in flush callback (which
+ * leaves the panel blank on this board -- the port either does not convert
+ * LVGL's internal colour format to the panel's RGB565, or does not call
+ * lv_display_flush_ready() under PARTIAL render mode, stalling the render
+ * pipeline after the first frame).
+ *
+ * Our flush reads the LVGL draw buffer (whatever its internal colour depth is)
+ * and converts every pixel to RGB565 with lv_color_to16() -- this is correct
+ * for ANY LVGL colour depth -- then writes it to the panel via the raw LCD
+ * driver's putarea().  lv_display_flush_ready() is always called so LVGL keeps
+ * rendering.
+ * ------------------------------------------------------------------------- */
+static void my_lcd_flush(lv_display_t *disp, const lv_area_t *area,
+                         uint8_t *color_p)
+{
+  static bool s_first = true;
+  struct lcd_dev_s *lcd = ai_vox3_lcd_getdev(0);
+
+  if (lcd == NULL)
+    {
+      lv_display_flush_ready(disp);
+      return;
+    }
+
+  int w = area->x2 - area->x1 + 1;
+  int h = area->y2 - area->y1 + 1;
+  if (w <= 0 || h <= 0)
+    {
+      lv_display_flush_ready(disp);
+      return;
+    }
+
+  lcd->setpower(lcd, 0xff);   /* ensure the panel stays on */
+
+  /* One contiguous RGB565 buffer for the whole area (PARTIAL mode keeps h
+   * small -- a handful of rows -- so this is a few KB).  If it cannot be
+   * allocated (e.g. a surprise full-frame flush), fall back to row-by-row
+   * with a tiny per-row buffer. */
+  lv_color_t *src = (lv_color_t *)color_p;
+  uint16_t *buf = (uint16_t *)malloc((size_t)w * (size_t)h * 2);
+
+  if (buf != NULL)
+    {
+      for (int i = 0; i < w * h; i++)
+        {
+          buf[i] = lv_color_to16(src[i]).full;   /* -> RGB565 */
+        }
+
+      lcd->putarea(lcd, area->y1, area->y2, area->x1, area->x2,
+                   (uint8_t *)buf, (fb_coord_t)(w * 2));
+      free(buf);
+    }
+  else
+    {
+      uint16_t *row = (uint16_t *)malloc((size_t)w * 2);
+      if (row == NULL)
+        {
+          lv_display_flush_ready(disp);
+          return;
+        }
+
+      for (int y = 0; y < h; y++)
+        {
+          for (int x = 0; x < w; x++)
+            {
+              row[x] = lv_color_to16(src[y * w + x]).full;
+            }
+
+          lcd->putarea(lcd, area->y1 + y, area->y1 + y, area->x1, area->x2,
+                       (uint8_t *)row, (fb_coord_t)(w * 2));
+        }
+
+      free(row);
+    }
+
+  if (s_first)
+    {
+      s_first = false;
+      ets_printf("[FLUSH] custom flush active; first area %dx%d at (%d,%d)\n",
+                 w, h, area->x1, area->y1);
+    }
+
+  lv_display_flush_ready(disp);
+}
+
+/* ---------------------------------------------------------------------------
+ * Name: ui_smoke_test
+ *
+ * Diagnostic only.  Paint the WHOLE panel RED via the raw LCD driver
+ * (bypassing LVGL) so that after the first LVGL refresh the colour key is
+ * binary and unambiguous:
+ *     BLUE  -> LVGL custom flush works (hardware + format + flush_ready)
+ *     RED   -> flush still broken
+ *     WHITE -> even the raw putarea failed (panel asleep / SPI / wiring)
+ * ------------------------------------------------------------------------- */
 static void ui_smoke_test(void)
 {
   struct lcd_dev_s      *lcd = ai_vox3_lcd_getdev(0);
   struct fb_videoinfo_s  vinfo;
-  struct lcd_planeinfo_s pinfo;
   int ret;
 
   if (lcd == NULL)
@@ -158,39 +256,37 @@ static void ui_smoke_test(void)
   ret = lcd->setpower(lcd, 0xff);   /* LCD_FULL_ON */
   ets_printf("[SMOKE] setpower(0xff) ret=%d\n", ret);
 
-  ret = lcd->getplaneinfo(lcd, 0, &pinfo);
-  ets_printf("[SMOKE] getplaneinfo ret=%d bpp=%d\n", ret, (int)pinfo.bpp);
+  int w = (int)(vinfo.xres ? vinfo.xres : AIVOX3_LCD_WIDTH);
+  int h = (int)(vinfo.yres ? vinfo.yres : AIVOX3_LCD_HEIGHT);
+  int band = 20;            /* rows per putarea; small enough for internal RAM */
+  uint16_t *buf = (uint16_t *)malloc((size_t)w * band * 2);
 
-  if (ret == OK)
+  if (buf == NULL)
     {
-      int w = (int)(vinfo.xres ? vinfo.xres : AIVOX3_LCD_WIDTH);
-      int band = 20;            /* rows to paint; small enough for internal RAM */
-      int bpp = (int)pinfo.bpp ? (int)pinfo.bpp : 16;
-      int stride = w * (bpp / 8);
-      size_t bufsz = (size_t)(stride * band);
-      uint16_t *buf = (uint16_t *)malloc(bufsz);
-
-      if (buf != NULL)
-        {
-          for (int i = 0; i < w * band; i++)
-            {
-              buf[i] = 0xF800;   /* RGB565 solid red */
-            }
-
-          ret = pinfo.putarea(lcd, 0, band - 1, 0, w - 1,
-                              (uint8_t *)buf, (fb_coord_t)stride);
-          ets_printf("[SMOKE] putarea(red band 0..%d) ret=%d w=%d stride=%d\n",
-                     band - 1, ret, w, stride);
-          free(buf);
-        }
-      else
-        {
-          ets_printf("[SMOKE] malloc(%d) failed\n", (int)bufsz);
-        }
+      ets_printf("[SMOKE] malloc(%d) failed\n", (int)(w * band * 2));
+      return;
     }
 
-  ets_printf("[SMOKE] done; panel should be RED now, LVGL paints BLUE if "
-             "the tick fix works\n");
+  for (int i = 0; i < w * band; i++)
+    {
+      buf[i] = 0xF800;   /* RGB565 solid red */
+    }
+
+  for (int y = 0; y < h; y += band)
+    {
+      int y2 = y + band - 1;
+      if (y2 >= h)
+        {
+          y2 = h - 1;
+        }
+
+      lcd->putarea(lcd, y, y2, 0, w - 1,
+                   (uint8_t *)buf, (fb_coord_t)(w * 2));
+    }
+
+  free(buf);
+  ets_printf("[SMOKE] whole panel painted RED (raw LCD). "
+             "LVGL custom flush should overwrite it with BLUE.\n");
 }
 
 /****************************************************************************
@@ -223,6 +319,13 @@ int ui_init(void)
 
   ets_printf("[UI] disp registered via lv_nuttx_init\n");
 
+  /* Use OUR custom flush callback instead of the OpenVela port's built-in one.
+   * It converts LVGL's internal colour format to the panel's RGB565 and drives
+   * putarea() directly, and always calls lv_display_flush_ready().  This is the
+   * piece the stock port fails to do on this board (blank panel). */
+  lv_display_set_flush_cb(result.disp, my_lcd_flush);
+  ets_printf("[UI] custom flush callback installed\n");
+
   /* FIX: the NuttX LVGL port allocates its display draw buffer via clib malloc
    * from the kernel heap.  On this board PSRAM is disabled, so the heap is
    * internal SRAM only and a full-frame (240*320*2 ~= 150 KB) buffer malloc
@@ -243,7 +346,10 @@ int ui_init(void)
       return -ENOMEM;
     }
 
-  lv_obj_set_size(g_screen, AIVOX3_LCD_WIDTH, AIVOX3_LCD_HEIGHT);
+  /* The panel is 240x320 (getvideoinfo), even though the original UI layout
+   * assumed 240x240.  Size the root screen to the full panel so LVGL paints
+   * every row; otherwise rows 240..319 stay at the smoke-test colour. */
+  lv_obj_set_size(g_screen, AIVOX3_LCD_WIDTH, 320);
   lv_obj_set_style_bg_color(g_screen, lv_color_make(0x1b, 0x3e, 0x74), 0);
   lv_obj_set_style_bg_opa(g_screen, LV_OPA_COVER, 0);
   lv_scr_load(g_screen);
