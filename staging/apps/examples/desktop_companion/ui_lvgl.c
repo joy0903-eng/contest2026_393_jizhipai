@@ -168,6 +168,15 @@ static void my_lcd_flush(lv_display_t *disp, const lv_area_t *area,
       return;
     }
 
+  /* Guard against being invoked before the first render (the OpenVela port may
+   * call the flush callback during display setup with a NULL draw buffer).  A
+   * NULL deref here would hard-fault the boot, so bail out cleanly. */
+  if (color_p == NULL)
+    {
+      lv_display_flush_ready(disp);
+      return;
+    }
+
   /* putarea() lives on the LCD plane info, NOT on lcd_dev_s.  Fetch it once. */
   if (!s_pinfo_ready)
     {
@@ -343,13 +352,6 @@ int ui_init(void)
 
   ets_printf("[UI] disp registered via lv_nuttx_init\n");
 
-  /* Use OUR custom flush callback instead of the OpenVela port's built-in one.
-   * It converts LVGL's internal colour format to the panel's RGB565 and drives
-   * putarea() directly, and always calls lv_display_flush_ready().  This is the
-   * piece the stock port fails to do on this board (blank panel). */
-  lv_display_set_flush_cb(result.disp, my_lcd_flush);
-  ets_printf("[UI] custom flush callback installed\n");
-
   /* FIX: the NuttX LVGL port allocates its display draw buffer via clib malloc
    * from the kernel heap.  On this board PSRAM is disabled, so the heap is
    * internal SRAM only and a full-frame (240*320*2 ~= 150 KB) buffer malloc
@@ -363,6 +365,15 @@ int ui_init(void)
                          sizeof(g_lv_buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
   ets_printf("[UI] lv draw buffer set (partial, %u bytes)\n",
              (unsigned)sizeof(g_lv_buf));
+
+  /* Override the OpenVela port's built-in flush with OUR callback AFTER the
+   * buffer is set, so any buffer-triggered initial flush still uses the port's
+   * own (known-good) callback.  Our callback converts LVGL's internal colour
+   * to the panel's RGB565 and drives putarea() directly, and always calls
+   * lv_display_flush_ready().  It is hardened against being invoked before the
+   * first render (NULL colour pointer) so it can never fault the boot. */
+  lv_display_set_flush_cb(result.disp, my_lcd_flush);
+  ets_printf("[UI] custom flush callback installed\n");
 
   g_screen = lv_obj_create(NULL);
   if (g_screen == NULL)
