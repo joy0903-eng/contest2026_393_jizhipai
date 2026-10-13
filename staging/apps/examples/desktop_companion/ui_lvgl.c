@@ -164,9 +164,11 @@ static bool g_flush_live = false;
 static void my_lcd_flush(lv_display_t *disp, const lv_area_t *area,
                          uint8_t *color_p)
 {
+  ets_printf("[FLUSH] enter live=%d cp=%p\n", g_flush_live, (void *)color_p);
   if (!g_flush_live)
     {
       lv_display_flush_ready(disp);
+      ets_printf("[FLUSH] gated return\n");
       return;
     }
 
@@ -387,10 +389,11 @@ int ui_init(void)
    * to PARTIAL render mode; LVGL then flushes the screen band-by-band over
    * SPI.  (A later cleanup can enable PSRAM for a full-frame buffer.) */
   static lv_color_t g_lv_buf[240 * 20];   /* 240 px wide x 20 rows = 9600 B */
+  ets_printf("[UI] >> set_buffers buf=%p size=%u\n",
+             (void *)g_lv_buf, (unsigned)sizeof(g_lv_buf));
   lv_display_set_buffers(result.disp, g_lv_buf, NULL,
                          sizeof(g_lv_buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
-  ets_printf("[UI] lv draw buffer set (partial, %u bytes)\n",
-             (unsigned)sizeof(g_lv_buf));
+  ets_printf("[UI] << set_buffers returned\n");
 
   g_screen = lv_obj_create(NULL);
   if (g_screen == NULL)
