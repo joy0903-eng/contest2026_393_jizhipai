@@ -26,12 +26,17 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
 
 #include <lvgl/lvgl.h>
 
+#include <nuttx/lcd/lcd.h>
+#include <nuttx/video/fb.h>
+
 extern int ets_printf(const char *fmt, ...);
+extern struct lcd_dev_s *ai_vox3_lcd_getdev(int);
 
 #include "ui_lvgl.h"
 #include "config.h"
@@ -118,6 +123,75 @@ static lv_obj_t *make_read_btn(const char *label, int id)
  * Public Functions
  ****************************************************************************/
 
+
+/****************************************************************************
+ * Name: ui_smoke_test
+ *
+ * Description:
+ *   Diagnostic only.  Paint the whole panel RED via the raw LCD driver
+ *   (bypassing LVGL) to prove the SPI/ST7789 path works, and print the video
+ *   info + putarea result.  After this, the main loop's LVGL refresh (now that
+ *   the tick advances in ui_refresh) should paint BLUE over it.  The final
+ *   visible colour thus discriminates:
+ *     BLUE  -> hardware + tick both OK
+ *     RED   -> hardware OK, but LVGL still not flushing (tick still broken)
+ *     WHITE -> even the raw putarea failed (panel asleep / SPI / wiring)
+ ****************************************************************************/
+
+static void ui_smoke_test(void)
+{
+  struct lcd_dev_s      *lcd = ai_vox3_lcd_getdev(0);
+  struct fb_videoinfo_s  vinfo;
+  struct lcd_planeinfo_s pinfo;
+  int ret;
+
+  if (lcd == NULL)
+    {
+      ets_printf("[SMOKE] lcd dev NULL\n");
+      return;
+    }
+
+  ret = lcd->getvideoinfo(lcd, &vinfo);
+  ets_printf("[SMOKE] getvideoinfo ret=%d xres=%d yres=%d bpp=%d\n",
+             ret, (int)vinfo.xres, (int)vinfo.yres, (int)vinfo.bpp);
+
+  ret = lcd->setpower(lcd, 0xff);   /* LCD_FULL_ON */
+  ets_printf("[SMOKE] setpower(0xff) ret=%d\n", ret);
+
+  ret = lcd->getplaneinfo(lcd, 0, &pinfo);
+  ets_printf("[SMOKE] getplaneinfo ret=%d bpp=%d\n", ret, (int)pinfo.bpp);
+
+  if (ret == OK)
+    {
+      int w   = (int)(vinfo.xres ? vinfo.xres : AIVOX3_LCD_WIDTH);
+      int h   = (int)(vinfo.yres ? vinfo.yres : AIVOX3_LCD_HEIGHT);
+      int bpp = (int)pinfo.bpp ? (int)pinfo.bpp : 16;
+      int stride = w * (bpp / 8);
+      size_t bufsz = (size_t)(stride * h);
+      uint16_t *buf = (uint16_t *)malloc(bufsz);
+
+      if (buf != NULL)
+        {
+          for (int i = 0; i < w * h; i++)
+            {
+              buf[i] = 0xF800;   /* RGB565 solid red */
+            }
+
+          ret = pinfo.putarea(lcd, 0, h - 1, 0, w - 1,
+                              (uint8_t *)buf, (fb_coord_t)stride);
+          ets_printf("[SMOKE] putarea(red) ret=%d w=%d h=%d stride=%d\n",
+                     ret, w, h, stride);
+          free(buf);
+        }
+      else
+        {
+          ets_printf("[SMOKE] malloc(%d) failed\n", (int)bufsz);
+        }
+    }
+
+  ets_printf("[SMOKE] done; panel should be RED now, LVGL paints BLUE if "
+             "the tick fix works\n");
+}
 
 /****************************************************************************
  * Name: ui_init
@@ -225,6 +299,11 @@ int ui_init(void)
   /* IDLE shows only the start button; reading shows the controls. */
   ui_set_reading_mode(false);
 
+  /* Diagnostic: prove the raw SPI/ST7789 path paints, then let the normal
+   * LVGL refresh (now tick-driven) overwrite it with the UI.  See the
+   * ui_smoke_test() comment for the colour key. */
+  ui_smoke_test();
+
   g_ui_ready = true;
   ui_set_expression(UI_EXPR_IDLE);
   ets_printf("[UI] ui_init done OK\n");
@@ -326,6 +405,12 @@ void ui_refresh(void)
 {
   if (g_ui_ready)
     {
+      /* LVGL has NO built-in tick source unless CONFIG_LV_USE_NUTTX_TICK is
+       * set (it is NOT in this defconfig).  Without advancing the tick,
+       * lv_timer_handler() computes elapsed time = 0 and never fires the
+       * display-refresh timer, so LVGL never flushes a single pixel and the
+       * panel stays white.  Feed it the real loop period every iteration. */
+      lv_tick_inc((uint32_t)AIVOX3_LOOP_TICK_MS);
       lv_timer_handler();
     }
 }
