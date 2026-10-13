@@ -163,24 +163,24 @@ static void ui_smoke_test(void)
 
   if (ret == OK)
     {
-      int w   = (int)(vinfo.xres ? vinfo.xres : AIVOX3_LCD_WIDTH);
-      int h   = (int)(vinfo.yres ? vinfo.yres : AIVOX3_LCD_HEIGHT);
+      int w = (int)(vinfo.xres ? vinfo.xres : AIVOX3_LCD_WIDTH);
+      int band = 20;            /* rows to paint; small enough for internal RAM */
       int bpp = (int)pinfo.bpp ? (int)pinfo.bpp : 16;
       int stride = w * (bpp / 8);
-      size_t bufsz = (size_t)(stride * h);
+      size_t bufsz = (size_t)(stride * band);
       uint16_t *buf = (uint16_t *)malloc(bufsz);
 
       if (buf != NULL)
         {
-          for (int i = 0; i < w * h; i++)
+          for (int i = 0; i < w * band; i++)
             {
               buf[i] = 0xF800;   /* RGB565 solid red */
             }
 
-          ret = pinfo.putarea(lcd, 0, h - 1, 0, w - 1,
+          ret = pinfo.putarea(lcd, 0, band - 1, 0, w - 1,
                               (uint8_t *)buf, (fb_coord_t)stride);
-          ets_printf("[SMOKE] putarea(red) ret=%d w=%d h=%d stride=%d\n",
-                     ret, w, h, stride);
+          ets_printf("[SMOKE] putarea(red band 0..%d) ret=%d w=%d stride=%d\n",
+                     band - 1, ret, w, stride);
           free(buf);
         }
       else
@@ -222,6 +222,20 @@ int ui_init(void)
     }
 
   ets_printf("[UI] disp registered via lv_nuttx_init\n");
+
+  /* FIX: the NuttX LVGL port allocates its display draw buffer via clib malloc
+   * from the kernel heap.  On this board PSRAM is disabled, so the heap is
+   * internal SRAM only and a full-frame (240*320*2 ~= 150 KB) buffer malloc
+   * fails -> LVGL has no canvas to render into -> the panel stays white even
+   * though the display registers and the tick advances.  Give LVGL a small
+   * partial buffer (a few rows) that comfortably fits internal RAM and switch
+   * to PARTIAL render mode; LVGL then flushes the screen band-by-band over
+   * SPI.  (A later cleanup can enable PSRAM for a full-frame buffer.) */
+  static lv_color_t g_lv_buf[240 * 20];   /* 240 px wide x 20 rows = 9600 B */
+  lv_display_set_buffers(result.disp, g_lv_buf, NULL,
+                         sizeof(g_lv_buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
+  ets_printf("[UI] lv draw buffer set (partial, %u bytes)\n",
+             (unsigned)sizeof(g_lv_buf));
 
   g_screen = lv_obj_create(NULL);
   if (g_screen == NULL)
