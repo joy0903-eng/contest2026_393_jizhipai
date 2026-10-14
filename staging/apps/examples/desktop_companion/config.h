@@ -27,11 +27,11 @@ extern "C"
  * LLM (OpenAI-compatible) endpoint
  ****************************************************************************/
 
-/* Base URL and chat path for the mimo-v2.5-pro endpoint (confirmed). */
+/* Base URL and chat path for the mimo-v2.6-pro endpoint (user-specified). */
 #define AIVOX3_LLM_BASE_URL    "https://token-plan-cn.xiaomimimo.com/v1"
 #define AIVOX3_LLM_CHAT_PATH   "/chat/completions"
 #ifndef CONFIG_AIVOX3_LLM_MODEL
-#define AIVOX3_LLM_MODEL       "mimo-v2.5-pro"
+#define AIVOX3_LLM_MODEL       "mimo-v2.6-pro"
 #else
 #define AIVOX3_LLM_MODEL       CONFIG_AIVOX3_LLM_MODEL
 #endif

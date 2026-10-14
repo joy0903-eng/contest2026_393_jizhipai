@@ -22,13 +22,13 @@ config EXAMPLES_DESKTOP_COMPANION
     string "LLM API key (injected at build; NEVER commit plaintext)"
     default ""
     ---help---
-      API key for the mimo-v2.5-pro endpoint. Leave empty to inject it at
+      API key for the mimo-v2.6-pro endpoint. Leave empty to inject it at
       runtime via NVS. The source tree MUST NOT contain the real secret;
       prefer menuconfig or an NVS-stored value.
 
   config AIVOX3_LLM_MODEL
     string "LLM model name"
-    default "mimo-v2.5-pro"
+    default "mimo-v2.6-pro"
 
   config AIVOX3_WIFI_SSID
     string "Wi-Fi SSID (station mode)"

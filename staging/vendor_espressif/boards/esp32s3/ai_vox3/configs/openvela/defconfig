@@ -328,11 +328,13 @@ CONFIG_TLS_TASK_NELEM=8
 # --- Application: desktop_companion ------------------------------------------
 CONFIG_BUILTIN=y
 CONFIG_EXAMPLES_DESKTOP_COMPANION=y
-# LLM API key is injected at build time only (Kconfig string / NVS).
-# NEVER put a plaintext secret here. The value below is intentionally empty.
-CONFIG_AIVOX3_LLM_API_KEY=""
-# TODO(real-device/build): provide the real key via `make menuconfig` or an
-# NVS injected value; the build must NOT commit the secret to git.
+# LLM endpoint (user-specified 2026-09-20): mimo-v2.6-pro @ token-plan-cn.
+# The API key is embedded here for the contest firmware build per the user's
+# explicit instruction. WARNING: this commits a plaintext secret to the repo
+# (the Wi-Fi passphrase above is committed the same way) -- rotate/scrub it
+# before any public release.
+CONFIG_AIVOX3_LLM_MODEL="mimo-v2.6-pro"
+CONFIG_AIVOX3_LLM_API_KEY="tp-ctp2uwfqldr8xivbovhbqffnfmnuho3hlrbyysmlql9l28a2"
 
 # --- Wi-Fi station credentials ---------------------------------------------
 # Used by net_services.c:net_init() -> net_wifi_connect().  WPA2-PSK.
