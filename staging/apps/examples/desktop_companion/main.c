@@ -299,6 +299,7 @@ static void show_clock(void)
   if (localtime_r(&now, &t) != NULL)
     {
       ui_show_time(&t);
+      ui_show_date(&t);
     }
 }
 

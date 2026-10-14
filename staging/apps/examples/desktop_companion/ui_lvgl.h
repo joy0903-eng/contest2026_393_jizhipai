@@ -50,6 +50,9 @@ void ui_set_expression(ui_expression_t expr);
 /* Update the on-screen time card from a broken-down time. */
 void ui_show_time(const struct tm *tp);
 
+/* Update the on-screen date card from a broken-down time. */
+void ui_show_date(const struct tm *tp);
+
 /* Update the weather card. desc may be NULL (shows "—"). */
 void ui_show_weather(const char *desc, int temp_c);
 

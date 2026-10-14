@@ -41,6 +41,11 @@ extern struct lcd_dev_s *ai_vox3_lcd_getdev(int);
 #include "ui_lvgl.h"
 #include "config.h"
 
+/* 子集中文点阵字体（由 toolchain/fontgen/fontgen.js 从 simhei.ttf 生成，16px，
+ * 仅覆盖屏幕上出现的 UI 字符串）。在 ui_init 里挂到每个文本标签上，中文状态
+ * 才能正常显示而不是方框。LV_FONT_DECLARE 展开为 extern lv_font_t ui_font_cn。 */
+LV_FONT_DECLARE(ui_font_cn);
+
 /****************************************************************************
  * Private Data
  ****************************************************************************/
@@ -64,6 +69,7 @@ static lv_obj_t *g_face;
 static lv_obj_t *g_time;
 static lv_obj_t *g_weather;
 static lv_obj_t *g_todo;
+static lv_obj_t *g_date;
 static lv_obj_t *g_status;
 static lv_obj_t *g_read_start;   /* "READ" button (visible in IDLE)    */
 static lv_obj_t *g_read_pause;   /* reading controls (visible in READ)  */
@@ -112,6 +118,7 @@ static lv_obj_t *make_read_btn(const char *label, int id)
   lv_obj_t *lbl = lv_label_create(btn);
 
   lv_label_set_text(lbl, label);
+  lv_obj_set_style_text_font(lbl, &ui_font_cn, 0);
   lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
   lv_obj_add_event_cb(btn, read_btn_event, LV_EVENT_CLICKED,
                       (void *)(intptr_t)id);
@@ -440,24 +447,36 @@ int ui_init(void)
   g_time = lv_label_create(g_screen);
   lv_obj_set_width(g_time, AIVOX3_LCD_WIDTH - 16);
   lv_label_set_long_mode(g_time, LV_LABEL_LONG_WRAP);
-  lv_obj_align(g_time, LV_ALIGN_TOP_MID, 0, 90);
-  lv_label_set_text(g_time, "Time: --:--:--");
+  lv_obj_align(g_time, LV_ALIGN_TOP_MID, 0, 80);
+  lv_label_set_text(g_time, "时间: --:--:--");
+  lv_obj_set_style_text_font(g_time, &ui_font_cn, 0);
   lv_obj_set_style_text_color(g_time, lv_color_white(), 0);
+
+  /* Date card. */
+  g_date = lv_label_create(g_screen);
+  lv_obj_set_width(g_date, AIVOX3_LCD_WIDTH - 16);
+  lv_label_set_long_mode(g_date, LV_LABEL_LONG_WRAP);
+  lv_obj_align(g_date, LV_ALIGN_TOP_MID, 0, 110);
+  lv_label_set_text(g_date, "日期: --");
+  lv_obj_set_style_text_font(g_date, &ui_font_cn, 0);
+  lv_obj_set_style_text_color(g_date, lv_color_white(), 0);
 
   /* Weather card. */
   g_weather = lv_label_create(g_screen);
   lv_obj_set_width(g_weather, AIVOX3_LCD_WIDTH - 16);
   lv_label_set_long_mode(g_weather, LV_LABEL_LONG_WRAP);
-  lv_obj_align(g_weather, LV_ALIGN_TOP_MID, 0, 130);
-  lv_label_set_text(g_weather, "Weather: --");
+  lv_obj_align(g_weather, LV_ALIGN_TOP_MID, 0, 145);
+  lv_label_set_text(g_weather, "天气: --");
+  lv_obj_set_style_text_font(g_weather, &ui_font_cn, 0);
   lv_obj_set_style_text_color(g_weather, lv_color_white(), 0);
 
   /* Todo card. */
   g_todo = lv_label_create(g_screen);
   lv_obj_set_width(g_todo, AIVOX3_LCD_WIDTH - 16);
   lv_label_set_long_mode(g_todo, LV_LABEL_LONG_WRAP);
-  lv_obj_align(g_todo, LV_ALIGN_TOP_MID, 0, 165);
-  lv_label_set_text(g_todo, "Todo: --");
+  lv_obj_align(g_todo, LV_ALIGN_TOP_MID, 0, 180);
+  lv_label_set_text(g_todo, "待办: --");
+  lv_obj_set_style_text_font(g_todo, &ui_font_cn, 0);
   lv_obj_set_style_text_color(g_todo, lv_color_white(), 0);
 
   /* Status line (bottom). */
@@ -465,7 +484,8 @@ int ui_init(void)
   lv_obj_set_width(g_status, AIVOX3_LCD_WIDTH - 16);
   lv_label_set_long_mode(g_status, LV_LABEL_LONG_WRAP);
   lv_obj_align(g_status, LV_ALIGN_BOTTOM_MID, 0, -6);
-  lv_label_set_text(g_status, "AI-VOX3 ready");
+  lv_label_set_text(g_status, "AI-VOX3 已就绪");
+  lv_obj_set_style_text_font(g_status, &ui_font_cn, 0);
   lv_obj_set_style_text_color(g_status, lv_color_white(), 0);
 
   /* --- Reading (audiobook) controls --- */
@@ -474,19 +494,20 @@ int ui_init(void)
   lv_label_set_long_mode(g_read_info, LV_LABEL_LONG_WRAP);
   lv_obj_align(g_read_info, LV_ALIGN_BOTTOM_MID, 0, -22);
   lv_label_set_text(g_read_info, "");
+  lv_obj_set_style_text_font(g_read_info, &ui_font_cn, 0);
   lv_obj_set_style_text_color(g_read_info, lv_color_white(), 0);
   lv_obj_add_flag(g_read_info, LV_OBJ_FLAG_HIDDEN);
 
-  g_read_start = make_read_btn("READ", UI_BTN_READ_START);
+  g_read_start = make_read_btn("朗读", UI_BTN_READ_START);
   lv_obj_align(g_read_start, LV_ALIGN_TOP_MID, 0, 60);
 
-  g_read_pause = make_read_btn("II", UI_BTN_READ_PAUSE);
+  g_read_pause = make_read_btn("暂停", UI_BTN_READ_PAUSE);
   lv_obj_align(g_read_pause, LV_ALIGN_BOTTOM_LEFT, 4, -6);
-  g_read_resume = make_read_btn(">", UI_BTN_READ_RESUME);
+  g_read_resume = make_read_btn("继续", UI_BTN_READ_RESUME);
   lv_obj_align(g_read_resume, LV_ALIGN_BOTTOM_LEFT, 50, -6);
-  g_read_next = make_read_btn(">>", UI_BTN_READ_NEXT);
+  g_read_next = make_read_btn("下一章", UI_BTN_READ_NEXT);
   lv_obj_align(g_read_next, LV_ALIGN_BOTTOM_MID, 0, -6);
-  g_read_stop = make_read_btn("X", UI_BTN_READ_STOP);
+  g_read_stop = make_read_btn("停止", UI_BTN_READ_STOP);
   lv_obj_align(g_read_stop, LV_ALIGN_BOTTOM_RIGHT, -4, -6);
 
   /* IDLE shows only the start button; reading shows the controls. */
@@ -550,9 +571,27 @@ void ui_show_time(const struct tm *tp)
       return;
     }
 
-  snprintf(buf, sizeof(buf), "Time: %02d:%02d:%02d",
+  snprintf(buf, sizeof(buf), "时间: %02d:%02d:%02d",
            tp->tm_hour, tp->tm_min, tp->tm_sec);
   lv_label_set_text(g_time, buf);
+}
+
+/****************************************************************************
+ * Name: ui_show_date
+ ****************************************************************************/
+
+void ui_show_date(const struct tm *tp)
+{
+  char buf[32];
+
+  if (!g_ui_ready || tp == NULL)
+    {
+      return;
+    }
+
+  snprintf(buf, sizeof(buf), "日期: %04d-%02d-%02d",
+           tp->tm_year + 1900, tp->tm_mon + 1, tp->tm_mday);
+  lv_label_set_text(g_date, buf);
 }
 
 /****************************************************************************
@@ -570,11 +609,11 @@ void ui_show_weather(const char *desc, int temp_c)
 
   if (desc == NULL)
     {
-      lv_label_set_text(g_weather, "Weather: --");
+      lv_label_set_text(g_weather, "天气: --");
       return;
     }
 
-  snprintf(buf, sizeof(buf), "Weather: %s %dC", desc, temp_c);
+  snprintf(buf, sizeof(buf), "天气: %d℃", temp_c);
   lv_label_set_text(g_weather, buf);
 }
 
@@ -591,7 +630,7 @@ void ui_show_todo(const char *text)
       return;
     }
 
-  snprintf(buf, sizeof(buf), "Todo: %s", text ? text : "--");
+  snprintf(buf, sizeof(buf), "待办: %s", text ? text : "--");
   lv_label_set_text(g_todo, buf);
 }
 
@@ -680,6 +719,6 @@ void ui_show_reading(int chapter, int line, int total, int pct)
       return;
     }
 
-  snprintf(buf, sizeof(buf), "Ch%d L%d/%d %d%%", chapter, line, total, pct);
+  snprintf(buf, sizeof(buf), "第%d章 行 %d/%d %d%%", chapter, line, total, pct);
   lv_label_set_text(g_read_info, buf);
 }
