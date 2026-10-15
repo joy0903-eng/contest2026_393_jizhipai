@@ -347,7 +347,7 @@ CONFIG_AIVOX3_WIFI_PASSWORD="rczzzhr312"
 # Host running toolchain/voice_bridge/bridge_chat.py.  Home routers hand out
 # DHCP leases, so this WILL go stale -- override at runtime from the USB-CDC
 # console with:  bridge 192.168.1.42 8765
-CONFIG_AIVOX3_BRIDGE_HOST="192.168.110.205"
+CONFIG_AIVOX3_BRIDGE_HOST="192.168.110.206"
 CONFIG_AIVOX3_BRIDGE_PORT=8765
 # Socket inactivity timeout.  A measured turn is 8.3 s (real speech) to
 # 18.2 s (text); the bridge's own LLM timeout is (5,40).  60 s is safe.
