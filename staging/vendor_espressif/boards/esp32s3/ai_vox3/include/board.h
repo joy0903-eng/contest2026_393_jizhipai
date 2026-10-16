@@ -72,14 +72,16 @@
 #define BOARD_ES8311_I2S_MCLK    11
 #define BOARD_ES8311_I2S_BCLK    10
 
-/* TODO(real-device): The vendor doc contradicts itself:
- *   WS/LRCK = 9 or 8 ; DOUT(ASDOUT) = 8 or 7 ; DIN(DSDIN) = 7 or 9
- * The current assumption below is ONE of the plausible combinations.
- * Verify on real HW with an oscilloscope before relying on audio capture/play.
+/* REAL-HW VERIFIED (2026-10-16): the Arduino reference firmware captures
+ * real audio only with WS=8 / DOUT(ASDOUT, codec->ESP mic)=7 / DIN(DSDIN,
+ * ESP->codec playback)=9.  The previous BSP values (9/8/7) had the I2S data
+ * lines SWAPPED, so the ESP32-S3 sampled the wrong GPIO and every capture
+ * came back all-zero (firmware logged "maxpeak=0" -> stuck in LISTEN).
+ * These three are the only correct combination for this board.
  */
-#define BOARD_ES8311_I2S_WS      9     /* WS/LRCK  (9 or 8)  */
-#define BOARD_ES8311_I2S_DOUT    8     /* ASDOUT    (8 or 7)  */
-#define BOARD_ES8311_I2S_DIN     7     /* DSDIN     (7 or 9)  */
+#define BOARD_ES8311_I2S_WS      8     /* WS/LRCK  */
+#define BOARD_ES8311_I2S_DOUT    7     /* ASDOUT  (codec -> ESP32, microphone)  */
+#define BOARD_ES8311_I2S_DIN     9     /* DSDIN   (ESP32 -> codec, playback)    */
 
 /* Audio format used by ES8311 (16-bit, mono, 16 kHz by default). */
 #define BOARD_AUDIO_SAMPLE_RATE  16000

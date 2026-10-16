@@ -176,13 +176,12 @@ static size_t   g_read_pcm_len = 0;
 
 static void btn_callback(int btn_id)
 {
-  if (btn_id == AI_VOX3_BTN_A)
+  /* Both the A button and the BOOT button start a talk turn.  The user's
+   * reflex is to press BOOT ("按住说话"), so it must NOT only toggle sleep.
+   */
+  if (btn_id == AI_VOX3_BTN_A || btn_id == AI_VOX3_BTN_BOOT)
     {
       g_wake_req = true;
-    }
-  else if (btn_id == AI_VOX3_BTN_BOOT)
-    {
-      g_sleep_req = true;
     }
 }
 

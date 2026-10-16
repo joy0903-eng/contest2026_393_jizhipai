@@ -264,6 +264,43 @@ static void capture_cb(const int16_t *samples, int nsamples, void *arg)
 
   ring_put((const uint8_t *)samples, (size_t)nsamples * sizeof(int16_t));
 
+  /* Diagnostic: report peak sample magnitude ~1 Hz so a dead/quiet mic is
+   * visible in the serial log (peak == 0 means no signal reaches the ESP32 at
+   * all -- e.g. the I2S data pins are swapped).  O(nsamples), cheap. */
+  {
+    static unsigned int g_pk_cnt = 0;
+    static int          g_pk_max = 0;
+    int p = 0;
+    int i;
+
+    for (i = 0; i < nsamples; i++)
+      {
+        int s = samples[i];
+        if (s < 0)
+          {
+            s = -s;
+          }
+        if (s > p)
+          {
+            p = s;
+          }
+      }
+
+    if (p > g_pk_max)
+      {
+        g_pk_max = p;
+      }
+
+    if (++g_pk_cnt >= 50)   /* ~50 callbacks * ~20 ms = ~1 s */
+      {
+        syslog(LOG_INFO,
+               "audio: capture peak=%d (0 => dead mic / swapped I2S pins)\n",
+               g_pk_max);
+        g_pk_max = 0;
+        g_pk_cnt = 0;
+      }
+  }
+
   /* Offline voice front-end tap.  This runs on the capture thread, so it
    * must stay cheap: dsp_vad_feed() is O(nsamples) with no allocation and
    * no I/O.  Keyword recognition (MFCC + DTW) is orders of magnitude more
