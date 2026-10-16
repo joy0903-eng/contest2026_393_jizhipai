@@ -63,6 +63,13 @@
 #define OCTET_STREAM_HDR   "Content-Type: application/octet-stream\r\n"
 #define JSON_HDR           "Content-Type: application/json\r\n"
 
+/* Wake-check response buffer. {"wake": false, "text": "...."} is tiny, so a
+ * fixed small allocation is used instead of the PCM sink (whose first growth
+ * step alone is 128 KB).
+ */
+
+#define WAKE_RESP_MAX      (1024u)
+
 /****************************************************************************
  * Private Types
  ****************************************************************************/
@@ -75,6 +82,15 @@ struct pcm_sink_s
   size_t   len;
   size_t   cap;
   bool     stopped;   /* ceiling reached or OOM: silently drop the rest */
+};
+
+/* Fixed-size text sink used for the small JSON replies (wake check). */
+
+struct wake_sink_s
+{
+  char  *buf;
+  size_t len;
+  size_t cap;
 };
 
 /* Base64 stream decoder state. */
@@ -934,6 +950,357 @@ int bridge_turn_text(const char *text, bridge_turn_result_t *res)
   syslog(LOG_INFO, "bridge: text=%s | out=%s | %lu ms audio\n",
          text, res->reply[0] != '\0' ? res->reply : "(filtered)",
          (unsigned long)res->ms);
+  return OK;
+}
+
+/****************************************************************************
+ * Name: utf8_emit
+ *
+ * Description:
+ *   Append one Unicode code point to a NUL-terminated UTF-8 buffer.
+ ****************************************************************************/
+
+static void utf8_emit(char *dst, size_t *len, size_t cap, uint32_t cp)
+{
+  if (cap == 0u)
+    {
+      return;
+    }
+
+  if (cp < 0x80u && *len + 1u < cap)
+    {
+      dst[(*len)++] = (char)cp;
+    }
+  else if (cp < 0x800u && *len + 2u < cap)
+    {
+      dst[(*len)++] = (char)(0xc0u | (cp >> 6));
+      dst[(*len)++] = (char)(0x80u | (cp & 0x3fu));
+    }
+  else if (cp < 0x10000u && *len + 3u < cap)
+    {
+      dst[(*len)++] = (char)(0xe0u | (cp >> 12));
+      dst[(*len)++] = (char)(0x80u | ((cp >> 6) & 0x3fu));
+      dst[(*len)++] = (char)(0x80u | (cp & 0x3fu));
+    }
+  else if (*len + 4u < cap)
+    {
+      dst[(*len)++] = (char)(0xf0u | (cp >> 18));
+      dst[(*len)++] = (char)(0x80u | ((cp >> 12) & 0x3fu));
+      dst[(*len)++] = (char)(0x80u | ((cp >> 6) & 0x3fu));
+      dst[(*len)++] = (char)(0x80u | (cp & 0x3fu));
+    }
+
+  dst[*len] = '\0';
+}
+
+/****************************************************************************
+ * Name: wake_body_cb
+ *
+ * Description:
+ *   http_request_stream() sink for the wake-check response. The body is
+ *   ~100 bytes, so it is accumulated in a small heap buffer and parsed
+ *   afterwards instead of being scanned incrementally.
+ ****************************************************************************/
+
+static int wake_body_cb(const uint8_t *chunk, size_t len, void *arg)
+{
+  struct wake_sink_s *w = (struct wake_sink_s *)arg;
+  size_t i;
+
+  for (i = 0u; i < len; i++)
+    {
+      if (w->len + 1u < w->cap)
+        {
+          w->buf[w->len++] = (char)chunk[i];
+          w->buf[w->len]   = '\0';
+        }
+      else
+        {
+          break;                /* response larger than expected: truncate */
+        }
+    }
+
+  return OK;
+}
+
+/****************************************************************************
+ * Name: wake_find_value
+ *
+ * Description:
+ *   Locate the value of a top-level string/bool member of a flat JSON
+ *   object. Returns a pointer just past the ':' (whitespace skipped), or
+ *   NULL when the member is absent.
+ ****************************************************************************/
+
+static const char *wake_find_value(const char *body, const char *key)
+{
+  char        needle[24];
+  const char *p;
+
+  snprintf(needle, sizeof(needle), "\"%s\"", key);
+  p = strstr(body, needle);
+  if (p == NULL)
+    {
+      return NULL;
+    }
+
+  p = strchr(p + strlen(needle), ':');
+  if (p == NULL)
+    {
+      return NULL;
+    }
+
+  p++;
+  while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+    {
+      p++;
+    }
+
+  return p;
+}
+
+/****************************************************************************
+ * Name: wake_parse_bool
+ *
+ * Description:
+ *   Read a JSON true/false member. Anything else (null, absent, malformed)
+ *   is false: a failed wake check must never wake the board.
+ ****************************************************************************/
+
+static bool wake_parse_bool(const char *body, const char *key)
+{
+  const char *p = wake_find_value(body, key);
+
+  if (p == NULL)
+    {
+      return false;
+    }
+
+  return (strncmp(p, "true", 4) == 0);
+}
+
+/****************************************************************************
+ * Name: wake_parse_string
+ *
+ * Description:
+ *   Read a JSON string member, unescaping \" \\ \/ and \uXXXX (including
+ *   UTF-16 surrogate pairs) into dst.
+ ****************************************************************************/
+
+static void wake_parse_string(const char *body, const char *key,
+                              char *dst, size_t cap)
+{
+  const char *p = wake_find_value(body, key);
+  size_t      n = 0;
+
+  if (dst == NULL || cap == 0u)
+    {
+      return;
+    }
+
+  dst[0] = '\0';
+
+  if (p == NULL || *p != '"')
+    {
+      return;
+    }
+
+  p++;
+
+  while (*p != '\0' && *p != '"' && n + 1u < cap)
+    {
+      if (*p != '\\')
+        {
+          dst[n++] = *p++;
+          continue;
+        }
+
+      p++;
+      switch (*p)
+        {
+          case 'n': dst[n++] = '\n'; p++; break;
+          case 'r': dst[n++] = '\r'; p++; break;
+          case 't': dst[n++] = '\t'; p++; break;
+          case 'b': dst[n++] = '\b'; p++; break;
+          case 'f': dst[n++] = '\f'; p++; break;
+          case 'u':
+            {
+              uint32_t cp   = 0u;
+              int      k;
+
+              p++;
+              for (k = 0; k < 4 && *p != '\0'; k++)
+                {
+                  char     c = *p++;
+                  uint32_t d;
+
+                  if (c >= '0' && c <= '9')
+                    {
+                      d = (uint32_t)(c - '0');
+                    }
+                  else if (c >= 'a' && c <= 'f')
+                    {
+                      d = (uint32_t)(c - 'a' + 10u);
+                    }
+                  else if (c >= 'A' && c <= 'F')
+                    {
+                      d = (uint32_t)(c - 'A' + 10u);
+                    }
+                  else
+                    {
+                      break;
+                    }
+
+                  cp = (cp << 4) | d;
+                }
+
+              /* Surrogate pair: 0xD800-0xDBFF followed by 0xDC00-0xDFFF. */
+
+              if (cp >= 0xd800u && cp <= 0xdbffu &&
+                  p[0] == '\\' && p[1] == 'u')
+                {
+                  uint32_t lo = 0u;
+                  int      j;
+                  const char *q = p + 2;
+
+                  for (j = 0; j < 4 && *q != '\0'; j++)
+                    {
+                      char     c = *q++;
+                      uint32_t d;
+
+                      if (c >= '0' && c <= '9')
+                        {
+                          d = (uint32_t)(c - '0');
+                        }
+                      else if (c >= 'a' && c <= 'f')
+                        {
+                          d = (uint32_t)(c - 'a' + 10u);
+                        }
+                      else if (c >= 'A' && c <= 'F')
+                        {
+                          d = (uint32_t)(c - 'A' + 10u);
+                        }
+                      else
+                        {
+                          break;
+                        }
+
+                      lo = (lo << 4) | d;
+                    }
+
+                  if (j == 4 && lo >= 0xdc00u && lo <= 0xdfffu)
+                    {
+                      cp = 0x10000u + ((cp - 0xd800u) << 10) +
+                           (lo - 0xdc00u);
+                      p = q;
+                    }
+                }
+
+              utf8_emit(dst, &n, cap, cp);
+              break;
+            }
+
+          default:                       /* \" \\ \/ and anything else */
+            dst[n++] = *p++;
+            break;
+        }
+    }
+
+  dst[n] = '\0';
+}
+
+/****************************************************************************
+ * Name: bridge_wake_check
+ ****************************************************************************/
+
+int bridge_wake_check(const int16_t *pcm, int nsamples, bool *wake_out,
+                      char *text_out, size_t text_cap)
+{
+  struct wake_sink_s sink;
+  char               hdr[160];
+  size_t             body_len;
+  int                status = 0;
+  int                ret;
+
+  if (wake_out != NULL)
+    {
+      *wake_out = false;
+    }
+
+  if (text_out != NULL && text_cap > 0u)
+    {
+      text_out[0] = '\0';
+    }
+
+  if (pcm == NULL || nsamples <= 0)
+    {
+      return -EINVAL;
+    }
+
+  body_len = (size_t)nsamples * (size_t)sizeof(int16_t);
+
+  /* The bridge's do_PUT ignores the path and the content type (:528-532);
+   * the headers are kept anyway so a packet capture stays readable.
+   */
+
+  snprintf(hdr, sizeof(hdr), "%sX-Aivox3-Sample-Rate: %d\r\n"
+                             "X-Aivox3-Samples: %d\r\n",
+           OCTET_STREAM_HDR, AIVOX3_AUDIO_RATE, nsamples);
+
+  sink.buf = (char *)malloc(WAKE_RESP_MAX);
+  if (sink.buf == NULL)
+    {
+      return -ENOMEM;
+    }
+
+  sink.cap = (size_t)WAKE_RESP_MAX;
+  sink.len = 0u;
+  sink.buf[0] = '\0';
+
+  syslog(LOG_INFO, "bridge: PUT %s (%s:%u), %lu bytes PCM (wake check)\n",
+         AIVOX3_BRIDGE_PATH, g_host, (unsigned)g_port,
+         (unsigned long)body_len);
+
+  ret = http_request_stream(g_host, g_port, "PUT", AIVOX3_BRIDGE_PATH,
+                            hdr, (const uint8_t *)pcm, body_len,
+                            wake_body_cb, &sink,
+                            AIVOX3_BRIDGE_TIMEOUT_SEC, &status);
+
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: wake check failed: %d\n", ret);
+      free(sink.buf);
+      return ret;
+    }
+
+  if (status >= 400)
+    {
+      syslog(LOG_ERR, "ERROR: wake check HTTP %d\n", status);
+      free(sink.buf);
+      return -EIO;
+    }
+
+  if (sink.len == 0u)
+    {
+      free(sink.buf);
+      return -ENODATA;
+    }
+
+  if (wake_out != NULL)
+    {
+      *wake_out = wake_parse_bool(sink.buf, "wake");
+    }
+
+  if (text_out != NULL && text_cap > 0u)
+    {
+      wake_parse_string(sink.buf, "text", text_out, text_cap);
+    }
+
+  syslog(LOG_INFO, "bridge: wake check -> %s | text=%s\n",
+         (wake_out != NULL && *wake_out) ? "WAKE" : "no",
+         (text_out != NULL && text_out[0] != '\0') ? text_out : "(none)");
+
+  free(sink.buf);
   return OK;
 }
 

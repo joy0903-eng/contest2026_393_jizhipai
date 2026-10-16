@@ -87,6 +87,52 @@ config EXAMPLES_DESKTOP_COMPANION
       every received burst, not an overall deadline, so 60 s is a safe
       default that only fires on a genuinely dead bridge.
 
+  config AIVOX3_CHAT_IDLE_TIMEOUT
+    int "Continuous-conversation idle timeout (ms)"
+    default 12000
+    range 3000 120000
+    ---help---
+      Once the wake word ("你好") has been heard the board stays in
+      conversation mode: every finished utterance is sent to the bridge and
+      answered out loud, with NO second wake word and NO button press.
+      After this much silence (no utterance finished) the board returns to
+      standby and waits for "你好" again.
+
+      12000 ms (12 s) leaves room to think between sentences; raise it for a
+      chattier companion, lower it if the microphone picks up a lot of
+      ambient speech.
+
+  config AIVOX3_WAKE_MIN_MS
+    int "Shortest utterance sent for a wake check (ms)"
+    default 400
+    range 100 3000
+    ---help---
+      Standby gate: VAD blips shorter than this are dropped on the board
+      instead of being uploaded for wake-word recognition. Filters clicks,
+      door slams and key noise. "你好" spoken normally lasts 600-1000 ms,
+      so 400 ms is safe.
+
+  config AIVOX3_WAKE_ONESHOT
+    int "Answer 'wake word + question' in one shot (1 = on, 0 = off)"
+    default 1
+    range 0 1
+    ---help---
+      The bridge already returns the ASR transcript of the wake utterance.
+      With this enabled a sentence like "你好，讲个笑话" (longer than
+      AIVOX3_WAKE_ONESHOT_MIN_CHARS characters) is answered immediately
+      instead of being consumed as a bare wake word and waiting for a
+      second utterance.
+
+  config AIVOX3_WAKE_ONESHOT_MIN_CHARS
+    int "Characters a wake transcript needs to count as a question"
+    default 4
+    range 2 32
+    depends on AIVOX3_WAKE_ONESHOT
+    ---help---
+      Counted in UTF-8 code points, not bytes: "你好" is 2, "你好。" is 3,
+      "你好，讲个笑话" is 7. At or above this count the wake utterance is
+      also treated as the user's first question (one-shot).
+
   config SMART_HOME_BACKEND
     string "Smart-home backend (none/mqtt/http)"
     default "none"

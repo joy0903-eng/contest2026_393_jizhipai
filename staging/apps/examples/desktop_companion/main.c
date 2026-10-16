@@ -11,17 +11,26 @@
  * running toolchain/voice_bridge/bridge_chat.py, which returns the recognised
  * text plus synthesised speech; the answer is played back over the speaker.
  *
- *   IDLE   mic open, VAD listening, standby carousel
- *     |  -- VAD says "utterance finished" (optionally gated by local KWS)
- *     |  -- or button A / `wake` on the console
+ * TWO MODES, and only the first one needs a wake word:
+ *
+ *   IDLE   STANDBY: mic open, VAD listening, standby carousel.
+ *     |    Every finished utterance goes through the WAKE-WORD GATE:
+ *     |      tier A  offline KWS (kws_engine.c) when a template bank exists
+ *     |      tier B  PUT /api/turn -> the bridge runs ASR and answers
+ *     |              {"wake": bool, "text": "..."}  (bridge_chat.py :524)
+ *     |    Anything else is dropped; the board stays in standby.
+ *     |  -- "你好" recognised
+ *     |  -- or button A / `wake` on the console (fallback, no wake word)
  *     v
- *   WAKE   acknowledgement tone, mic re-armed cleanly
+ *   WAKE   acknowledgement tone, mic re-armed, conversation mode is opened
  *     v
- *   LISTEN wait for the utterance to arrive
+ *   CHAT   CONTINUOUS CONVERSATION: every finished utterance is uploaded and
+ *     |    answered. No second wake word, no button, no "hold to talk".
+ *     |    AIVOX3_CHAT_IDLE_TIMEOUT_MS of silence returns to IDLE standby.
  *     v
  *   TALK   mic closed -> POST PCM to the bridge -> transcript + reply + TTS
  *     v
- *   SPEAK  play the TTS PCM, show the reply -> back to IDLE
+ *   SPEAK  play the TTS PCM, show the reply -> back to CHAT (not IDLE)
  *
  * (BOOT button toggles SLEEP, where the microphone is deliberately stopped.)
  *
@@ -30,7 +39,8 @@
  *
  * SERIAL CONSOLE (USB-CDC)
  *   bridge [<host> [<port>]]   query / override the bridge address
- *   wake                       same as button A
+ *   wake                       same as button A (enters conversation mode)
+ *   sleep                      stop the microphone, leave conversation mode
  *   clean                      clear the in-RAM todo list
  *   <anything else>            treated as a typed utterance: answered with
  *                              speech exactly like a spoken one
@@ -93,6 +103,15 @@ extern int ets_printf(const char *fmt, ...);
 
 #define SERIAL_LINE_MAX         256
 
+/* Standby status line. The LVGL default font has no CJK glyphs, so the
+ * wake word is spelled out in Latin on the display; the console log is the
+ * place where the Chinese transcript shows up.
+ */
+
+#define STATUS_STANDBY          "Standby -- say ni-hao"
+#define STATUS_LISTENING        "Listening..."
+#define STATUS_CHAT_OPEN        "Yes? I'm listening"
+
 /****************************************************************************
  * Private Types
  ****************************************************************************/
@@ -134,10 +153,43 @@ static size_t g_serial_len = 0;
 static char   g_typed[SERIAL_LINE_MAX];
 static bool   g_have_typed = false;
 
-/* LISTEN state deadline, counted in main-loop ticks. */
+/* --- Continuous conversation ------------------------------------------------
+ * g_chat_session is what makes this hands-free: once it is true every
+ * finished utterance is answered WITHOUT a second wake word and WITHOUT a
+ * button press. g_chat_idle_ticks counts silent main-loop ticks and drops
+ * the session (back to the wake-word gate) once it exceeds the limit.
+ */
 
-static int    g_listen_ticks = 0;
-static int    g_listen_limit = AIVOX3_LISTEN_TIMEOUT_MS / AIVOX3_LOOP_TICK_MS;
+static bool   g_chat_session    = false;
+static int    g_chat_idle_ticks = 0;
+static int    g_chat_idle_limit = AIVOX3_CHAT_IDLE_TIMEOUT_MS /
+                                  AIVOX3_LOOP_TICK_MS;
+
+/* Transcript the bridge returned for the wake utterance. Used for the
+ * one-shot path ("你好，讲个笑话" -> answered straight away) and for
+ * diagnostics.
+ */
+
+static char   g_wake_text[BRIDGE_TRANSCRIPT_MAX];
+
+/* Wake word, in every spelling the ASR is known to produce. Mirrors
+ * bridge_chat.py's _WAKE_GREET (:62) so the board and the PC agree.
+ * UTF-8 literals: "你好" plus the usual mis-hearings.
+ */
+
+static const char *const g_wake_words[] =
+{
+  "\xe4\xbd\xa0\xe5\xa5\xbd",   /* 你好 */
+  "\xe5\x93\x88\xe5\x96\xbd",   /* 哈喽 */
+  "\xe5\x97\xa8",               /* 嗨   */
+  "\xe6\x82\xa8\xe5\xa5\xbd",   /* 您好 */
+  "\xe5\xa6\xae\xe5\xa5\xbd",   /* 妮好 */
+  "\xe6\xb3\xa5\xe5\xa5\xbd",   /* 泥好 */
+  "\xe6\x8b\x9f\xe5\xa5\xbd",   /* 拟好 */
+  "\xe5\xb0\xbc\xe5\xa5\xbd"    /* 尼好 */
+};
+
+#define WAKE_WORD_COUNT (sizeof(g_wake_words) / sizeof(g_wake_words[0]))
 
 /* Diagnostic latches: report each degraded condition once, not 20x a
  * second, but re-report it if it later clears and comes back.
@@ -430,7 +482,13 @@ static void handle_serial_line(const char *line)
 
   if (strcmp(line, "wake") == 0)
     {
-      g_wake_req = true;
+      g_wake_req = true;          /* fallback trigger: skips the wake word */
+      return;
+    }
+
+  if (strcmp(line, "sleep") == 0)
+    {
+      g_sleep_req = true;         /* stops the mic, leaves conversation mode */
       return;
     }
 
@@ -534,7 +592,11 @@ static void rearm_mic(void)
  * Name: collect_utterance
  *
  * Description:
- *   Try to collect one finished utterance into g_utt.
+ *   Try to collect one finished utterance into g_utt. NO keyword filtering
+ *   happens here: this is the raw utterance, used both as the input of the
+ *   wake-word decision (wake_gate(), standby only) and as a chat turn while
+ *   a conversation is open. MFCC + DTW are far too expensive for the audio
+ *   callback and are run on this thread inside wake_gate() instead.
  *
  * Returned Value:
  *   > 0 : sample count now valid in g_utt.
@@ -544,26 +606,125 @@ static void rearm_mic(void)
 
 static int collect_utterance(void)
 {
-  float score = 0.0f;
-  int   ret;
-
   if (g_utt == NULL)
     {
       return -EINVAL;
     }
 
-  ret = audio_capture_take_word(g_utt, VAD_MAX_WORD_SAMPLES);
-  if (ret <= 0)
+  return audio_capture_take_word(g_utt, VAD_MAX_WORD_SAMPLES);
+}
+
+/****************************************************************************
+ * Name: utf8_char_count
+ *
+ * Description:
+ *   Number of UTF-8 code points in s (continuation bytes are not counted).
+ *   Used to tell "你好" (2) from "你好，讲个笑话" (7).
+ ****************************************************************************/
+
+static int utf8_char_count(const char *s)
+{
+  int n = 0;
+
+  if (s == NULL)
     {
-      return ret;
+      return 0;
     }
 
-  /* Local keyword filter, when a template bank actually exists. With no
-   * templates there is deliberately NO gate: the utterance goes to the PC,
-   * where Vosk recognises arbitrary speech (and the bridge itself filters
-   * out ambient noise). Waking WITHOUT the wake word is intentional here --
-   * it is how the demo works on a freshly flashed board.
+  while (*s != '\0')
+    {
+      if (((unsigned char)*s & 0xc0u) != 0x80u)
+        {
+          n++;                          /* not a 0x80-0xBF continuation byte */
+        }
+
+      s++;
+    }
+
+  return n;
+}
+
+/****************************************************************************
+ * Name: text_contains_wake_word
+ *
+ * Description:
+ *   Board-side second opinion on a transcript. The greeting table mirrors
+ *   bridge_chat.py's _WAKE_GREET (:62), which is what the bridge itself
+ *   uses; keeping a copy here means the board still wakes when the bridge's
+ *   verdict is missing but the transcript is available.
+ ****************************************************************************/
+
+static bool text_contains_wake_word(const char *text)
+{
+  size_t i;
+
+  if (text == NULL || text[0] == '\0')
+    {
+      return false;
+    }
+
+  for (i = 0; i < WAKE_WORD_COUNT; i++)
+    {
+      if (strstr(text, g_wake_words[i]) != NULL)
+        {
+          return true;
+        }
+    }
+
+  return false;
+}
+
+/****************************************************************************
+ * Name: wake_gate
+ *
+ * Description:
+ *   STANDBY-ONLY decision: is the utterance currently sitting in g_utt the
+ *   wake word ("你好") or not?
+ *
+ *   Two tiers, cheapest first:
+ *     A - offline KWS (kws_engine.c, MFCC + banded DTW) when a template bank
+ *         is loaded. Zero network cost. Runs on this (consumer) thread, never
+ *         in the audio callback.
+ *     B - the PC bridge's wake re-check: PUT /api/turn -> Vosk ASR ->
+ *         {"wake": bool, "text": "..."}. ASR only, no LLM and no TTS, so it
+ *         costs a fraction of a full turn and needs no templates -- this is
+ *         the tier that works on a freshly flashed board.
+ *
+ *   Tier A is a shortcut, not a veto: when it rejects, tier B still runs,
+ *   because a stale/over-tight DTW threshold must not make the board deaf.
+ *
+ * Returned Value:
+ *    1 : wake word recognised (g_wake_text holds the transcript when the
+ *        bridge supplied one).
+ *    0 : not the wake word; the utterance is dropped.
+ *   <0 : negated errno -- could not decide (stay in standby).
+ ****************************************************************************/
+
+static int wake_gate(void)
+{
+  float score = 0.0f;
+  bool  wake  = false;
+  int   ms;
+  int   ret;
+
+  if (g_utt == NULL || g_utt_nsamples <= 0)
+    {
+      return 0;
+    }
+
+  /* Drop clicks and other sub-AIVOX3_WAKE_MIN_MS blips on the board: they
+   * cost a round trip to the PC and can never be "你好".
    */
+
+  ms = g_utt_nsamples * 1000 / AIVOX3_AUDIO_RATE;
+  if (ms < AIVOX3_WAKE_MIN_MS)
+    {
+      syslog(LOG_DEBUG, "wake: ignored %d ms blip (< %d ms)\n",
+             ms, AIVOX3_WAKE_MIN_MS);
+      return 0;
+    }
+
+  /* --- Tier A: offline keyword spotting --- */
 
   if (kws_is_ready())
     {
@@ -574,19 +735,65 @@ static int collect_utterance(void)
           g_kws_warned = true;
         }
 
-      /* MFCC + DTW run HERE, on the consumer thread, never in the audio
-       * callback (which would stall the apb pipeline and underrun RX).
-       */
-      if (kws_recognize(g_utt, ret, &score) < 0)
+      /* MFCC + DTW run HERE, on the consumer thread. */
+      if (kws_recognize(g_utt, g_utt_nsamples, &score) >= 0)
         {
-          syslog(LOG_DEBUG, "kws: rejected (score %.0f)\n", (double)score);
-          return 0;
+          syslog(LOG_INFO, "wake: local KWS accepted (score %.0f)\n",
+                 (double)score);
+          g_wake_text[0] = '\0';
+          return 1;
         }
 
-      syslog(LOG_INFO, "kws: accepted (score %.0f)\n", (double)score);
+      syslog(LOG_DEBUG, "kws: rejected (score %.0f), asking the bridge\n",
+             (double)score);
     }
 
-  return ret;
+  /* --- Tier B: the PC bridge confirms it from the ASR transcript --- */
+
+  if (!net_is_connected())
+    {
+      if (!g_net_warned)
+        {
+          g_net_warned = true;
+          syslog(LOG_ERR, "ERROR: wlan0 has no IPv4 address; the wake-word "
+                 "check needs the PC bridge (bridge <pc-ip>)\n");
+        }
+
+      return -ENETDOWN;
+    }
+
+  if (g_net_warned)
+    {
+      g_net_warned = false;
+      syslog(LOG_INFO, "network: wlan0 is up again\n");
+    }
+
+  ret = bridge_wake_check(g_utt, g_utt_nsamples, &wake,
+                          g_wake_text, sizeof(g_wake_text));
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: wake check failed: %d\n", ret);
+      return ret;
+    }
+
+  if (wake)
+    {
+      return 1;
+    }
+
+  /* The bridge answered, but said no. Trust its own transcript as a second
+   * opinion before discarding the utterance.
+   */
+
+  if (text_contains_wake_word(g_wake_text))
+    {
+      syslog(LOG_INFO, "wake: board-side match on '%s'\n", g_wake_text);
+      return 1;
+    }
+
+  syslog(LOG_INFO, "wake: not the wake word ('%s'), staying in standby\n",
+         g_wake_text[0] != '\0' ? g_wake_text : "(no transcript)");
+  return 0;
 }
 
 /****************************************************************************
@@ -814,7 +1021,7 @@ int main(int argc, char *argv[])
   ets_printf("[MAIN] rearm_mic done\n");
 
   ui_set_expression(UI_EXPR_IDLE);
-  set_status("Standby -- talk to me");
+  set_status(STATUS_STANDBY);
   ets_printf("[MAIN] entering main loop\n");
 
   /* --- Main loop --- */
@@ -836,11 +1043,13 @@ int main(int argc, char *argv[])
               g_state = AIVOX3_STATE_IDLE;
               ui_set_expression(UI_EXPR_IDLE);
               rearm_mic();
-              set_status("Standby -- talk to me");
+              set_status(STATUS_STANDBY);
             }
           else
             {
-              g_state = AIVOX3_STATE_SLEEP;
+              g_state           = AIVOX3_STATE_SLEEP;
+              g_chat_session    = false;   /* wake word required again */
+              g_chat_idle_ticks = 0;
               (void)audio_capture_stop();
               bridge_turn_result_release(&g_result);
               ui_set_expression(UI_EXPR_SLEEP);
@@ -911,15 +1120,45 @@ int main(int argc, char *argv[])
                   break;
                 }
 
-              /* Path 3: the VAD finished an utterance while we were
-               * listening in standby. This is the real voice trigger.
+              /* Path 3: the VAD finished an utterance in standby. This is
+               * the real voice trigger -- and the ONLY path that may open a
+               * conversation without a button, so it is gated by the wake
+               * word. Everything that is not "你好" is dropped here.
                */
               ret = collect_utterance();
               if (ret > 0)
                 {
                   g_utt_nsamples = ret;
                   g_turn_src     = TURN_PCM;
-                  g_state        = AIVOX3_STATE_WAKE;
+
+                  ret = wake_gate();
+                  if (ret > 0)
+                    {
+                      /* One-shot: "你好，讲个笑话" already carries the
+                       * question, so answer it directly instead of waiting
+                       * for a second utterance. The transcript the wake
+                       * check returned is the user's text.
+                       */
+                      if (AIVOX3_WAKE_ONESHOT &&
+                          utf8_char_count(g_wake_text) >=
+                          AIVOX3_WAKE_ONESHOT_MIN_CHARS)
+                        {
+                          strncpy(g_typed, g_wake_text, sizeof(g_typed) - 1);
+                          g_typed[sizeof(g_typed) - 1] = '\0';
+                          g_turn_src                   = TURN_TEXT;
+                          g_utt_nsamples               = 0;
+                        }
+
+                      g_state = AIVOX3_STATE_WAKE;
+                    }
+                  else
+                    {
+                      /* Not the wake word (or undecidable): drop it and
+                       * keep waiting in standby.
+                       */
+                      g_utt_nsamples = 0;
+                      g_turn_src     = TURN_NONE;
+                    }
                 }
               else if (ret == -EAGAIN && !g_vad_warned)
                 {
@@ -947,17 +1186,28 @@ int main(int argc, char *argv[])
               usleep(150000);
               rearm_mic();
 
-              g_listen_ticks = 0;
+              /* The wake word is now out of the way: open the conversation.
+               * From here on NO wake word and NO button is required until
+               * the conversation idle timeout expires.
+               */
+              g_chat_session    = true;
+              g_chat_idle_ticks = 0;
 
-              /* A voice trigger already carries its utterance. */
-              if (g_utt_nsamples > 0)
+              /* The wake word itself is not a question -- only a one-shot
+               * sentence (TURN_TEXT) survives this point.
+               */
+              g_utt_nsamples = 0;
+
+              if (g_turn_src == TURN_TEXT)
                 {
                   g_state = AIVOX3_STATE_TALK;
                 }
               else
                 {
-                  set_status("Listening...");
-                  g_state = AIVOX3_STATE_LISTEN;
+                  g_turn_src = TURN_NONE;
+                  ui_set_expression(UI_EXPR_HAPPY);
+                  set_status(STATUS_CHAT_OPEN);
+                  g_state = AIVOX3_STATE_CHAT;
                 }
 
               break;
@@ -965,13 +1215,41 @@ int main(int argc, char *argv[])
 
           case AIVOX3_STATE_LISTEN:
             {
-              set_status("Listening...");
+              /* Superseded by AIVOX3_STATE_CHAT: a wake now opens a full
+               * conversation instead of a single timed listen window. Kept
+               * so a stale state value never falls through to default.
+               */
+              g_state = AIVOX3_STATE_CHAT;
+              break;
+            }
+
+          case AIVOX3_STATE_CHAT:
+            {
+              /* CONTINUOUS CONVERSATION: the microphone stays open and every
+               * finished utterance is answered. No wake word, no button.
+               */
+              set_status(STATUS_LISTENING);
+              rearm_mic();
+
+              /* Typing on the console works mid-conversation too (handy for
+               * testing without speaking) and keeps the session open.
+               */
+              if (g_have_typed)
+                {
+                  g_have_typed      = false;
+                  g_turn_src        = TURN_TEXT;
+                  g_chat_idle_ticks = 0;
+                  g_state           = AIVOX3_STATE_TALK;
+                  break;
+                }
 
               ret = collect_utterance();
               if (ret > 0)
                 {
-                  g_utt_nsamples = ret;
-                  g_state        = AIVOX3_STATE_TALK;
+                  g_utt_nsamples    = ret;
+                  g_turn_src        = TURN_PCM;
+                  g_chat_idle_ticks = 0;
+                  g_state           = AIVOX3_STATE_TALK;
                   break;
                 }
 
@@ -984,17 +1262,24 @@ int main(int argc, char *argv[])
 
                   if (nsamples > 0)
                     {
-                      g_utt_nsamples = nsamples;
-                      g_state        = AIVOX3_STATE_TALK;
+                      g_utt_nsamples    = nsamples;
+                      g_turn_src        = TURN_PCM;
+                      g_chat_idle_ticks = 0;
+                      g_state           = AIVOX3_STATE_TALK;
                       break;
                     }
                 }
 
-              g_listen_ticks++;
-              if (g_listen_ticks >= g_listen_limit)
+              /* Nobody said anything for AIVOX3_CHAT_IDLE_TIMEOUT_MS: drop
+               * back to standby, where "你好" is required again.
+               */
+              g_chat_idle_ticks++;
+              if (g_chat_idle_ticks >= g_chat_idle_limit)
                 {
+                  g_chat_session    = false;
+                  g_chat_idle_ticks = 0;
                   ui_set_expression(UI_EXPR_IDLE);
-                  set_status("Standby -- talk to me");
+                  set_status(STATUS_STANDBY);
                   g_state = AIVOX3_STATE_IDLE;
                 }
 
@@ -1012,15 +1297,14 @@ int main(int argc, char *argv[])
               else
                 {
                   /* Either the transport failed, or the bridge decided there
-                   * was nothing worth saying (ambient noise). Both simply
-                   * return to standby.
+                   * was nothing worth saying (ambient noise). A conversation
+                   * stays OPEN either way: the user simply speaks again.
                    */
                   bridge_turn_result_release(&g_result);
 
                   if (ret == OK)
                     {
                       ui_set_expression(UI_EXPR_HAPPY);
-                      set_status("Standby -- talk to me");
                     }
                   else
                     {
@@ -1033,7 +1317,26 @@ int main(int argc, char *argv[])
                   g_turn_src     = TURN_NONE;
                   g_utt_nsamples = 0;
                   rearm_mic();
-                  g_state = AIVOX3_STATE_IDLE;
+
+                  if (g_chat_session)
+                    {
+                      g_chat_idle_ticks = 0;
+                      if (ret == OK)
+                        {
+                          set_status(STATUS_LISTENING);
+                        }
+
+                      g_state = AIVOX3_STATE_CHAT;
+                    }
+                  else
+                    {
+                      if (ret == OK)
+                        {
+                          set_status(STATUS_STANDBY);
+                        }
+
+                      g_state = AIVOX3_STATE_IDLE;
+                    }
                 }
 
               break;
@@ -1068,8 +1371,22 @@ int main(int argc, char *argv[])
               ui_set_expression(UI_EXPR_HAPPY);
               g_turn_src     = TURN_NONE;
               g_utt_nsamples = 0;
-              set_status("Standby -- talk to me");
-              g_state = AIVOX3_STATE_IDLE;
+
+              /* Back into the conversation, not into standby: the user must
+               * be able to answer immediately without saying "你好" again.
+               */
+              if (g_chat_session)
+                {
+                  g_chat_idle_ticks = 0;
+                  set_status(STATUS_LISTENING);
+                  g_state = AIVOX3_STATE_CHAT;
+                }
+              else
+                {
+                  set_status(STATUS_STANDBY);
+                  g_state = AIVOX3_STATE_IDLE;
+                }
+
               break;
             }
 
@@ -1168,7 +1485,7 @@ int main(int argc, char *argv[])
 
                   g_read_pcm_len = 0;
                   ui_set_reading_mode(false);
-                  set_status("Standby -- talk to me");
+                  set_status(STATUS_STANDBY);
                   ui_set_expression(UI_EXPR_IDLE);
                   rearm_mic();
                   g_state = AIVOX3_STATE_IDLE;

@@ -135,6 +135,34 @@ int bridge_turn_pcm(const int16_t *pcm, int nsamples,
 int bridge_turn_text(const char *text, bridge_turn_result_t *res);
 
 /****************************************************************************
+ * Name: bridge_wake_check
+ *
+ * Description:
+ *   Wake-word re-check on the PC bridge (bridge_chat.py do_PUT at :524).
+ *   The board uploads one utterance, the bridge runs Vosk ASR on it and
+ *   answers {"wake": true/false, "text": "<transcript>"}. ASR ONLY: no LLM,
+ *   no TTS, so this costs a fraction of a full turn and is the wake path
+ *   that works when no offline KWS template bank is available.
+ *
+ * Input Parameters:
+ *   pcm       - mono int16 samples at AIVOX3_AUDIO_RATE (little endian).
+ *   nsamples  - sample count (> 0).
+ *   wake_out  - receives the bridge's verdict (never NULL; set to false on
+ *               every failure path too).
+ *   text_out  - optional; receives the recognised text (NUL terminated, may
+ *               be truncated to text_cap - 1).
+ *   text_cap  - capacity of text_out, bytes (0 / NULL = not wanted).
+ *
+ * Returned Value:
+ *   OK (0) with *wake_out set on a completed check; negated errno otherwise
+ *   (-EINVAL, -ENOMEM, -ENODATA empty body, -ENETUNREACH/-EHOSTUNREACH
+ *   transport failure, -ETIMEDOUT, -EIO a >= 400 HTTP status).
+ ****************************************************************************/
+
+int bridge_wake_check(const int16_t *pcm, int nsamples, bool *wake_out,
+                      char *text_out, size_t text_cap);
+
+/****************************************************************************
  * Name: bridge_set_endpoint
  *
  * Description:

@@ -126,9 +126,10 @@ extern "C"
  * this cadence, so no state ever blocks the loop for long except SPEAK. */
 #define AIVOX3_LOOP_TICK_MS         50
 
-/* How long a prompt stays open waiting for the user to start talking
- * (button-triggered turns only). A pure voice trigger has no deadline: it
- * simply keeps listening in IDLE. */
+/* LEGACY: deadline of the old single-shot LISTEN window. That state was
+ * superseded by AIVOX3_STATE_CHAT (continuous conversation), whose deadline
+ * is AIVOX3_CHAT_IDLE_TIMEOUT_MS below; the symbol is kept so existing
+ * defconfigs still parse. */
 #define AIVOX3_LISTEN_TIMEOUT_MS    12000
 
 /* Must wait for the speaker's mechanical ring-down before re-opening the
@@ -141,6 +142,63 @@ extern "C"
  * at 16 kHz / 16-bit / mono. Anything beyond is dropped (not fatal) so one
  * chatty answer can never eat the whole heap. */
 #define AIVOX3_TTS_PCM_MAX_BYTES    (768u * 1024u)
+
+/****************************************************************************
+ * Wake word ("你好" / "ni hao") + continuous conversation
+ *
+ * Two-tier design (see main.c wake_gate()):
+ *   tier A - offline KWS (kws_engine.c) when a template bank is loaded:
+ *            zero network cost, instant, but needs recorded templates.
+ *   tier B - the PC bridge's wake re-check (PUT /api/turn, bridge_chat.py
+ *            do_PUT at :524): the board uploads the utterance, the bridge
+ *            runs Vosk ASR and answers {"wake": bool, "text": "..."}.
+ *            ASR only -- no LLM, no TTS -- so it is cheap and it needs no
+ *            on-board templates, which is why it is the tier that actually
+ *            works on a freshly flashed board.
+ ****************************************************************************/
+
+/* Idle gap that ends a conversation. While a session is open every finished
+ * utterance is answered WITHOUT a second wake word; after this much silence
+ * the board drops back to standby and waits for "你好" again.
+ * 12 s is a compromise: long enough to think between sentences, short enough
+ * that the device stops eavesdropping soon after you walk away.
+ */
+#ifndef CONFIG_AIVOX3_CHAT_IDLE_TIMEOUT
+#define AIVOX3_CHAT_IDLE_TIMEOUT_MS 12000
+#else
+#define AIVOX3_CHAT_IDLE_TIMEOUT_MS CONFIG_AIVOX3_CHAT_IDLE_TIMEOUT
+#endif
+
+/* Shortest utterance worth uploading for a wake check, milliseconds. Clicks,
+ * door slams and other sub-0.4 s blips are dropped on the board instead of
+ * costing a round trip to the PC. "你好" is ~0.6-1.0 s, so this is safe.
+ */
+#ifndef CONFIG_AIVOX3_WAKE_MIN_MS
+#define AIVOX3_WAKE_MIN_MS          400
+#else
+#define AIVOX3_WAKE_MIN_MS          CONFIG_AIVOX3_WAKE_MIN_MS
+#endif
+
+/* One-shot support: "你好，讲个笑话" is answered straight away instead of
+ * being consumed as a bare wake word. The bridge already returns the ASR
+ * text of the wake utterance, so the leftover sentence is free.
+ * 1 = enabled (default), 0 = wake word is always consumed on its own.
+ */
+#ifndef CONFIG_AIVOX3_WAKE_ONESHOT
+#define AIVOX3_WAKE_ONESHOT         1
+#else
+#define AIVOX3_WAKE_ONESHOT         CONFIG_AIVOX3_WAKE_ONESHOT
+#endif
+
+/* How many characters (UTF-8 code points, not bytes) the wake transcript
+ * must contain before it is treated as "wake word + a real question" rather
+ * than a plain greeting. "你好" is 2, "你好。" is 3, "你好，讲个笑话" is 7.
+ */
+#ifndef CONFIG_AIVOX3_WAKE_ONESHOT_MIN_CHARS
+#define AIVOX3_WAKE_ONESHOT_MIN_CHARS 4
+#else
+#define AIVOX3_WAKE_ONESHOT_MIN_CHARS CONFIG_AIVOX3_WAKE_ONESHOT_MIN_CHARS
+#endif
 
 /****************************************************************************
  * LCD geometry (mirror of the BSP; app uses its own copy)
@@ -208,9 +266,10 @@ extern "C"
 
 typedef enum
 {
-  AIVOX3_STATE_IDLE = 0,    /* standby carousel + MIC ALWAYS CAPTURING     */
-  AIVOX3_STATE_WAKE,        /* ack (tone + face); mic is re-armed cleanly  */
-  AIVOX3_STATE_LISTEN,      /* waiting for a finished VAD utterance        */
+  AIVOX3_STATE_IDLE = 0,    /* STANDBY: mic capturing, wake-word gate only */
+  AIVOX3_STATE_WAKE,        /* ack (tone + face); opens a chat session     */
+  AIVOX3_STATE_LISTEN,      /* superseded by CHAT; kept for log stability  */
+  AIVOX3_STATE_CHAT,        /* CONVERSATION: every utterance is answered   */
   AIVOX3_STATE_TALK,        /* upload the utterance to the PC voice bridge */
   AIVOX3_STATE_SPEAK,       /* play the returned TTS PCM, show the reply   */
   AIVOX3_STATE_SLEEP,       /* low-power / dimmed: capture stopped         */
@@ -218,7 +277,7 @@ typedef enum
   AIVOX3_STATE_READING      /* audiobook: synthesizing + playing a segment */
 } aivox3_state_t;
 
-#define AIVOX3_STATE_COUNT     8
+#define AIVOX3_STATE_COUNT     9
 
 #ifdef __cplusplus
 }
