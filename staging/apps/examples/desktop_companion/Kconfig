@@ -127,7 +127,6 @@ config EXAMPLES_DESKTOP_COMPANION
     int "Characters a wake transcript needs to count as a question"
     default 4
     range 2 32
-    depends on AIVOX3_WAKE_ONESHOT
     ---help---
       Counted in UTF-8 code points, not bytes: "你好" is 2, "你好。" is 3,
       "你好，讲个笑话" is 7. At or above this count the wake utterance is
