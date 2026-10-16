@@ -21,6 +21,12 @@
 #include <nuttx/kthread.h>
 #include <nuttx/lcd/lcd_dev.h>
 
+/* struct mallinfo / mallinfo() live in <malloc.h>; <nuttx/mm/mm.h> only
+ * carries kmm_mallinfo() (used when CONFIG_MM_KERNEL_HEAP is in play). */
+
+#include <malloc.h>
+#include <nuttx/mm/mm.h>
+
 #include <stdint.h>
 
 #include <debug.h>
@@ -34,6 +40,10 @@
 
 #ifdef CONFIG_ESP32S3_WIFI
 #include "esp32s3_wlan.h"
+#endif
+
+#ifdef CONFIG_ESP32S3_SPIRAM
+#include "esp32s3_spiram.h"
 #endif
 
 void esp32s3_board_initialize(void);
@@ -173,6 +183,55 @@ static int periph_init_entry(int argc, char *argv[])
   return 0;
 }
 
+/****************************************************************************
+ * Name: bsp_dump_heap
+ *
+ * Description:
+ *   Print the allocator's view of memory plus the PSRAM mapping.  Used to
+ *   prove on real hardware whether the 8 MB OPI PSRAM actually made it into
+ *   the heap, which is what decides whether esp32s3_wlan_sta_initialize()
+ *   succeeds or dies with -12 (-ENOMEM).
+ *
+ *   `arena` is the decisive number: it is the TOTAL heap size seen by
+ *   malloc().  With CONFIG_MM_REGIONS=1 the PSRAM is never added to the
+ *   heap -- xtensa_add_region() (arch/xtensa/src/esp32s3/esp32s3_
+ *   allocateheap.c:201) is gated on `#if CONFIG_MM_REGIONS > 1` and
+ *   arch/xtensa/src/common/xtensa.h:252 turns it into an empty macro
+ *   otherwise -- so arena stays at the internal-SRAM-only size even though
+ *   the PSRAM hardware itself initialised fine.  With CONFIG_MM_REGIONS=2
+ *   arena must come out at roughly internal SRAM + 8 MB.
+ *
+ *   Output goes through ets_printf (direct ROM console) and not syslog(),
+ *   because this runs before/whether-or-not the syslog channel is usable and
+ *   the relevant in-kernel diagnostics are minfo()/mwarn(), which are
+ *   compiled out in this config.
+ *
+ ****************************************************************************/
+
+static void bsp_dump_heap(const char *tag)
+{
+  struct mallinfo mi;
+
+#ifdef CONFIG_MM_KERNEL_HEAP
+  mi = kmm_mallinfo();
+#else
+  mi = mallinfo();
+#endif
+
+  ets_printf("[BSP] heap[%s]: arena=%d free=%d largest=%d used=%d\n",
+             tag, (int)mi.arena, (int)mi.fordblks, (int)mi.mxordblk,
+             (int)mi.uordblks);
+
+#ifdef CONFIG_ESP32S3_SPIRAM
+  ets_printf("[BSP] psram[%s]: inited=%d vaddr=0x%08x..0x%08x span=%d\n",
+             tag, (int)esp_spiram_is_initialized(),
+             (unsigned int)esp_spiram_allocable_vaddr_start(),
+             (unsigned int)esp_spiram_allocable_vaddr_end(),
+             (int)(esp_spiram_allocable_vaddr_end() -
+                   esp_spiram_allocable_vaddr_start()));
+#endif
+}
+
 int esp_board_initialize(void)
 {
   int ret = OK;
@@ -180,6 +239,11 @@ int esp_board_initialize(void)
   ets_printf("[BSP] esp_board_initialize enter\n");
 
 #if defined(CONFIG_ESP32S3_WIFI) && defined(ESP32S3_WLAN_HAS_STA)
+  /* Snapshot the heap right before Wi-Fi init: `arena` tells us whether the
+   * PSRAM is in the heap at all (see bsp_dump_heap above). */
+
+  bsp_dump_heap("pre-wlan");
+
   ets_printf("[BSP] -> wlan_sta_initialize\n");
   ret = esp32s3_wlan_sta_initialize();
   ets_printf("[BSP] <- wlan_sta_initialize ret=%d\n", ret);
@@ -187,6 +251,10 @@ int esp_board_initialize(void)
     {
       ets_printf("[BSP] ERR wlan sta init: %d\n", ret);
     }
+
+  /* And after, so the Wi-Fi driver's actual footprint is visible. */
+
+  bsp_dump_heap("post-wlan");
 #endif
 
   ets_printf("[BSP] past wlan block\n");

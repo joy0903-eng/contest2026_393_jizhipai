@@ -62,6 +62,41 @@ CONFIG_ESP32S3_SPIRAM_MODE_OCT=y
 CONFIG_ESP32S3_SPIRAM_BOOT_INIT=y
 CONFIG_ESP32S3_SPIRAM_COMMON_HEAP=y
 
+# --- ROOT CAUSE of wlan_sta_initialize -12 (ENOMEM) -------------------------
+# The four symbols above only make the *hardware* PSRAM work.  They do NOT
+# by themselves put the PSRAM into the kernel heap.  That last step is done
+# by xtensa_add_region(), and this NuttX compiles it in ONLY when
+# CONFIG_MM_REGIONS > 1:
+#
+#   arch/xtensa/src/esp32s3/esp32s3_allocateheap.c:201
+#     #if CONFIG_MM_REGIONS > 1
+#       void xtensa_add_region(void)      <-- the ONLY place that calls
+#     ...                                     MM_ADDREGION() on the PSRAM
+#   arch/xtensa/src/common/xtensa.h:252
+#     #if CONFIG_MM_REGIONS > 1
+#       void xtensa_add_region(void);
+#     #else
+#     #  define xtensa_add_region()       <-- compiled to a no-op!
+#
+# CONFIG_MM_REGIONS defaults to 1 and this defconfig never overrode it, so
+# xtensa_add_region() was a no-op macro: the 8 MB OPI PSRAM was initialised
+# by esp_spiram_init() (esp32s3_start.c:396 -- it did NOT panic, which is
+# exactly why the board boots at all), it was mapped, and then it was simply
+# never handed to the allocator.  The heap stayed at the internal-SRAM-only
+# size (~300 KB, up_allocate_heap() in the same file, lines 111-119), which
+# is far below what esp_wifi_init() needs -> -ENOMEM.
+#
+# Every official NuttX esp32s3 config that combines PSRAM with Wi-Fi sets
+# this explicitly -- e.g. boards/xtensa/esp32s3/esp32s3-eye/configs/wifi/
+# defconfig:42 "CONFIG_MM_REGIONS=2" (with SPIRAM=y at line 29 and
+# ESP32S3_WIFI=y at line 32), and likewise esp32s3-box/configs/lvgl(.3).
+# Side effect of the fix: PSRAM becomes heap region #1 while internal SRAM
+# stays region #0, so malloc() still satisfies the Wi-Fi driver's DMA-capable
+# allocations from internal SRAM first.  esp_wifi_malloc() is kmm_malloc()
+# (esp32s3_wifi_adapter.c:3512), i.e. the same heap -- no separate pool to
+# configure.
+CONFIG_MM_REGIONS=2
+
 # --- Boot format: SIMPLE_BOOT (ROM loads NuttX directly) ----------------------
 # Deliberately NOTHING is set here.  arch/xtensa/src/esp32s3/Kconfig:
 #   config ESPRESSIF_SIMPLE_BOOT
