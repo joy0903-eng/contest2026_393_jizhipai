@@ -44,19 +44,23 @@ CONFIG_ESP32S3_FLASH_16M=y
 # Kconfig depends-on knocked out the hidden ESPRESSIF_SIMPLE_BOOT (default y),
 # so the board booted through a 2nd-stage IDF bootloader that rejected the
 # image on a chip-revision check.  The bisect is reverted here.
-# --- SPIRAM: bisect OFF (run#71) ---------------------------------------------
-# After the zero-load-address padding fix, the image loads all 6 segments and
-# enters 0x40374e6c but spins silently in early IRAM init until TG0WDT resets
-# (Saved PC wanders around 0x40374xxx, no UART output).  That window is exactly
-# where octal PSRAM BOOT_INIT runs, so this bisect turns the whole SPIRAM block
-# off.  If the board then boots, PSRAM init is the culprit; if it still spins,
-# PSRAM is exonerated and the hunt moves to clock/cache config.
-# MODE_OCT / BOOT_INIT / COMMON_HEAP depend on SPIRAM and are dropped by
-# olddefconfig automatically -- they stay here (commented) for reference.
-# CONFIG_ESP32S3_SPIRAM is not set
-# CONFIG_ESP32S3_SPIRAM_MODE_OCT is not set
-# CONFIG_ESP32S3_SPIRAM_BOOT_INIT is not set
-# CONFIG_ESP32S3_SPIRAM_COMMON_HEAP is not set
+# --- SPIRAM: 重新启用 (2026-10-16) -----------------------------------------
+# Board is ESP32-S3-R8 with 8MB octal PSRAM.  It MUST be enabled: with this
+# block off the heap is only the ~512 KB internal SRAM, and
+# esp32s3_wlan_sta_initialize() fails with -12 (ENOMEM).  Wi-Fi then never
+# comes up, the board gets no IP and can never reach the PC voice bridge --
+# a hard blocker for voice interaction.
+#
+# The run#71 bisect turned this block off while chasing "loads all 6 segments
+# and enters 0x40374e6c but spins silently in early IRAM init until TG0WDT".
+# That spin is now explained AND fixed: the zero-load-address PADDING was
+# relocated to DRAM 0x3FC88000, which aliases onto IRAM (IRAM = DRAM +
+# 0x6E8000) and wiped the entry code.  With PADDING relocated clear of the
+# code segment the spin cause is gone, so PSRAM can safely come back on.
+CONFIG_ESP32S3_SPIRAM=y
+CONFIG_ESP32S3_SPIRAM_MODE_OCT=y
+CONFIG_ESP32S3_SPIRAM_BOOT_INIT=y
+CONFIG_ESP32S3_SPIRAM_COMMON_HEAP=y
 
 # --- Boot format: SIMPLE_BOOT (ROM loads NuttX directly) ----------------------
 # Deliberately NOTHING is set here.  arch/xtensa/src/esp32s3/Kconfig:
