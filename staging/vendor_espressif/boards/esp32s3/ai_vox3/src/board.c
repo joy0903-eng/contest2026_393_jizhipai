@@ -20,6 +20,7 @@
 #include <nuttx/arch.h>
 #include <nuttx/kthread.h>
 #include <nuttx/lcd/lcd_dev.h>
+#include <nuttx/mm/mm.h>
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -252,24 +253,23 @@ static void bsp_dump_heap(const char *tag)
  *
  ****************************************************************************/
 
-/* Did kmm_malloc() serve this block from the PSRAM heap region?  Mirrors the
- * esp32s3_ptr_extram() test used by esp_malloc_internal() and friends, but
- * expressed through the PSRAM allocable window (which is exactly the range
- * the extra heap region covers).  Anything outside it is internal DRAM.
+/* Internal-DRAM window check (same test the Wi-Fi blob's DMA requirement
+ * implies): ESP32-S3 maps internal DRAM at 0x3FC00000..0x3FCFFFFF while
+ * PSRAM lives far below it in the 0x3C000000 window.
  */
 
-static int bsp_ptr_in_psram(void *p)
+static int bsp_ptr_in_internal_dram(void *p)
 {
   return (p != NULL &&
-          (uintptr_t)p >= (uintptr_t)esp_spiram_allocable_vaddr_start() &&
-          (uintptr_t)p <  (uintptr_t)esp_spiram_allocable_vaddr_end());
+          (uintptr_t)p >= 0x3fc00000u &&
+          (uintptr_t)p <  0x3fd00000u);
 }
 
-/* Ladder probe: replicate the esp_*_internal() allocation semantics
- * (kmm_malloc + reject-PSRAM) so we can see the largest contiguous
- * INTERNAL-DRAM block available at this point in boot.  The Wi-Fi driver
- * needs several such blocks during esp_wifi_init(); if the ladder tops out
- * below what Wi-Fi asks for, that is the -12 root cause.
+/* Ladder probe [V636 port]: with CONFIG_MM_KERNEL_HEAP=y the kernel heap
+ * (kmm_malloc -- the allocator behind esp_malloc_internal & friends, i.e.
+ * the Wi-Fi blob's source) IS internal DRAM, while plain malloc() serves
+ * the PSRAM application heap.  Probe with kmm_malloc so the ladder still
+ * answers "largest contiguous internal-DRAM block right now".
  */
 
 static void bsp_probe_ladder(const char *tag)
@@ -283,16 +283,16 @@ static void bsp_probe_ladder(const char *tag)
 
   for (i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++)
     {
-      void *p = malloc(sizes[i]);
+      void *p = kmm_malloc(sizes[i]);
       const char *where;
 
       if (p == NULL)
         {
           where = "FAIL";
         }
-      else if (bsp_ptr_in_psram(p))
+      else if (!bsp_ptr_in_internal_dram(p))
         {
-          where = "PSRAM";
+          where = "NOT-INTERNAL";
         }
       else
         {
@@ -303,7 +303,7 @@ static void bsp_probe_ladder(const char *tag)
 
       if (p != NULL)
         {
-          free(p);
+          kmm_free(p);
         }
     }
 }

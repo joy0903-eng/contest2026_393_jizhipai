@@ -1,0 +1,131 @@
+AI-VOX3 [V636 port]: dual-heap split -- the real fix for wlan_sta_initialize -12
+=============================================================================
+
+WHY THIS PATCH EXISTS
+=====================
+
+run#139's allocation tracer (patch 0013) plus the ladder probe pinned the
+failure down to esp_wifi_init_internal() returning ESP_ERR_NO_MEM (257)
+BEFORE a single traced allocation callback fired, with 128 KB of contiguous
+internal DRAM still free -- i.e. not a plain "out of memory" story.
+
+The root cause is proven by the v636 build of the SAME board (same openvela
+manifest, same pre-compiled IDF Wi-Fi library, real hardware, WiFi/DHCP
+working end-to-end):
+
+  With BUILD_FLAT and no kernel heap, the Wi-Fi blob allocator
+  (esp_malloc_internal & friends -> kmm_malloc) shares the application
+  heap.  Internal DRAM pressure makes the blob's internal-only allocations
+  land in PSRAM, the radio cannot DMA from PSRAM, and esp_wifi_init dies
+  with ESP_ERR_NO_MEM -> wlan_sta_initialize ret=-12.
+
+  v636 fix: CONFIG_MM_KERNEL_HEAP=y splits the heaps:
+      kernel heap (kmm_malloc) = internal DRAM  <- Wi-Fi blob / DMA
+      app heap    (malloc)     = PSRAM          <- LVGL / audio / app
+
+  v636 hardware evidence:
+      [V636] kernel heap (WiFi/DMA): 3fcbb460..3fceee34 size=211412
+      [HEAPDBG] app heap: 3c180000..3c980000 size=8388608
+      [V636] heap split: app(malloc)=PSRAM, kernel(kmm_malloc)=internal DRAM
+
+WHAT THIS PATCH DOES
+====================
+
+CONFIG_MM_KERNEL_HEAP is NOT a Kconfig symbol in this tree (it is only
+`select`ed by ESP32S3_SPIRAM_USER_HEAP, whose definition lives in the
+esp-hal-3rdparty Kconfig and cannot be satisfied for BUILD_FLAT), so it can
+never arrive through the defconfig -- olddefconfig would silently drop it.
+It is therefore injected into .config by build.yml right after the
+pre-configure step (see that file for the full rationale).
+
+With the symbol defined, arch/xtensa/src/esp32s3/esp32s3_allocateheap.c
+takes its CONFIG_MM_KERNEL_HEAP branches:
+
+  * up_allocate_heap()   -> MM_USER_HEAP_EXTRAM: app heap = PSRAM
+  * up_allocate_kheap()  -> kernel heap = internal DRAM
+                            ([_sheap+IMEM, dram0_rtos_reserved_start))
+  * xtensa_add_region()  -> the COMMON_HEAP branch is disabled by
+                            `!defined(MM_USER_HEAP_EXTRAM)`, so PSRAM is NOT
+                            folded into the kernel heap
+
+This patch is the minimum source change needed for that path to compile and
+be observable in a FLAT build:
+
+  1. board_memorymap.h is only generated for protected/kernel builds; the
+     old `#ifdef CONFIG_MM_KERNEL_HEAP` include would break the flat build.
+     Guard it on CONFIG_BUILD_PROTECTED as well.
+  2. Ungalog console diagnostics (ets_printf -- syslog/nerr do NOT reach the
+     console on this build) so the boot log proves the split took effect:
+         [V636] app heap (malloc): ... (PSRAM)
+         [V636] kernel heap (WiFi/DMA): ... (internal DRAM)
+
+CONFIG_ESP32S3_SPIRAM_COMMON_HEAP stays y (audit gate), which is exactly
+what the v636 build had; the heap layout comes out identical because
+MM_USER_HEAP_EXTRAM overrides the region folding.
+--- a/arch/xtensa/src/esp32s3/esp32s3_allocateheap.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_allocateheap.c
+@@ -24,6 +24,8 @@
+ 
+ #include <nuttx/config.h>
+ 
++#include <stdint.h>
++
+ #include <debug.h>
+ #include <sys/types.h>
+ 
+@@ -33,10 +35,22 @@
+ #include <nuttx/nuttx.h>
+ #include <nuttx/userspace.h>
+ #include <arch/board/board.h>
+-#ifdef CONFIG_MM_KERNEL_HEAP
++/* AI-VOX3 [V636 port]: board_memorymap.h is only generated for
++ * protected/kernel builds; the FLAT kernel-heap path this board uses takes
++ * everything it needs from memory_layout.h and the ROM layout.  Guarding on
++ * CONFIG_MM_KERNEL_HEAP alone breaks the flat build (missing header).
++ */
++
++#if defined(CONFIG_MM_KERNEL_HEAP) && defined(CONFIG_BUILD_PROTECTED)
+ #include <arch/board/board_memorymap.h>
+ #endif
+ 
++/* AI-VOX3 [V636 port]: ungalog console output so the heap split is visible
++ * in the boot log (syslog/nerr does not reach the console on this build).
++ */
++
++extern int ets_printf(const char *fmt, ...);
++
+ #include <arch/esp32s3/memory_layout.h>
+ #include "xtensa.h"
+ #include "hardware/esp32s3_rom_layout.h"
+@@ -120,6 +134,16 @@
+ 
+   usize = utop - ubase;
+ 
++  /* AI-VOX3 [V636 port]: make the heap split visible at boot. */
++
++#ifdef MM_USER_HEAP_EXTRAM
++  ets_printf("[V636] app heap (malloc): 0x%08x..0x%08x size=%u (PSRAM)\n",
++             (unsigned)ubase, (unsigned)utop, (unsigned)usize);
++#else
++  ets_printf("[V636] app heap (malloc): 0x%08x..0x%08x size=%u (internal DRAM, SHARED with radio)\n",
++             (unsigned)ubase, (unsigned)utop, (unsigned)usize);
++#endif
++
+   minfo("Heap: start=%" PRIxPTR " end=%" PRIxPTR " size=%zu\n",
+         ubase, utop, usize);
+ 
+@@ -177,6 +201,14 @@
+ 
+   ksize = ktop - kbase;
+ 
++  /* AI-VOX3 [V636 port]: this is the DMA-capable heap the Wi-Fi blob's
++   * os_adapter allocators (esp_malloc_internal & friends -> kmm_malloc)
++   * draw from.  Nothing else competes with the radio for it.
++   */
++
++  ets_printf("[V636] kernel heap (WiFi/DMA): 0x%08x..0x%08x size=%u (internal DRAM)\n",
++             (unsigned)kbase, (unsigned)ktop, (unsigned)ksize);
++
+   minfo("Heap: start=%" PRIxPTR " end=%" PRIxPTR " size=%zu\n",
+         kbase, ktop, ksize);
+ 

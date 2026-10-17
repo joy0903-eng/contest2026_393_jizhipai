@@ -385,6 +385,43 @@ jobs:
             echo "PRE-CONFIGURE OK (.config materialized before audit)" >> build.log
           fi
           # ------------------------------------------------------------------
+          # [V636 port] Dual-heap split: CONFIG_MM_KERNEL_HEAP=y
+          # ---------------------------------------------------------------
+          # ROOT CAUSE of `wlan_sta_initialize ret=-12` (ESP_ERR_NO_MEM=257),
+          # proven on real hardware by the v636 server build of the SAME board
+          # (same openvela manifest, same pre-compiled IDF Wi-Fi library):
+          # with BUILD_FLAT and no kernel heap, the Wi-Fi blob allocator
+          # (esp_malloc_internal/kmm_malloc) shares the application heap.
+          # Once internal DRAM pressure rises the blob's internal-only
+          # allocations land in PSRAM, the radio cannot DMA from PSRAM, and
+          # esp_wifi_init_internal() dies with ESP_ERR_NO_MEM -> -12.
+          # The v636 fix splits the heaps:
+          #     kernel heap (kmm_malloc) = internal DRAM  <- Wi-Fi blob / DMA
+          #     app heap    (malloc)     = PSRAM          <- LVGL / audio / app
+          #
+          # CONFIG_MM_KERNEL_HEAP is NOT a Kconfig symbol anywhere in this
+          # tree (it is only `select`ed by ESP32S3_SPIRAM_USER_HEAP, whose
+          # own definition lives in the esp-hal-3rdparty Kconfig and cannot
+          # be satisfied for BUILD_FLAT), so it can NEVER arrive through the
+          # defconfig -- olddefconfig would silently drop it.  It therefore
+          # has to be injected into .config directly, exactly like the v636
+          # server build did.  `m` skips its own configure because .config
+          # already exists, and plain make never re-runs olddefconfig, so
+          # the injected line survives into mkconfig/autoconf.h.
+          #
+          # CONFIG_ESP32S3_SPIRAM_COMMON_HEAP stays y on purpose: with
+          # MM_KERNEL_HEAP defined, up_allocate_heap() takes the
+          # MM_USER_HEAP_EXTRAM branch (app heap = PSRAM) and
+          # xtensa_add_region()'s COMMON_HEAP branch is disabled by
+          # `!defined(MM_USER_HEAP_EXTRAM)`, i.e. PSRAM is NOT folded into
+          # the kernel heap.  The SPIRAM audit gate below still passes.
+          # ------------------------------------------------------------------
+          if ! grep -qx 'CONFIG_MM_KERNEL_HEAP=y' nuttx/.config; then
+            echo 'CONFIG_MM_KERNEL_HEAP=y' >> nuttx/.config
+            echo "[V636] injected CONFIG_MM_KERNEL_HEAP=y into .config (dual-heap split)" >> build.log
+          fi
+          grep -n 'CONFIG_MM_KERNEL_HEAP\|CONFIG_MM_REGIONS\|CONFIG_ESP32S3_SPIRAM' nuttx/.config >> build.log || true
+          # ------------------------------------------------------------------
           # CONFIG AUDIT: olddefconfig silently drops defconfig lines whose
           # Kconfig deps are unmet (run#29 root cause: AUDIO_ES8311 lives
           # behind the unset DRIVERS_AUDIO umbrella -> es8311.h compiled
