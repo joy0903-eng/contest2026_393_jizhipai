@@ -252,6 +252,62 @@ static void bsp_dump_heap(const char *tag)
  *
  ****************************************************************************/
 
+/* Did kmm_malloc() serve this block from the PSRAM heap region?  Mirrors the
+ * esp32s3_ptr_extram() test used by esp_malloc_internal() and friends, but
+ * expressed through the PSRAM allocable window (which is exactly the range
+ * the extra heap region covers).  Anything outside it is internal DRAM.
+ */
+
+static int bsp_ptr_in_psram(void *p)
+{
+  return (p != NULL &&
+          (uintptr_t)p >= (uintptr_t)esp_spiram_allocable_vaddr_start() &&
+          (uintptr_t)p <  (uintptr_t)esp_spiram_allocable_vaddr_end());
+}
+
+/* Ladder probe: replicate the esp_*_internal() allocation semantics
+ * (kmm_malloc + reject-PSRAM) so we can see the largest contiguous
+ * INTERNAL-DRAM block available at this point in boot.  The Wi-Fi driver
+ * needs several such blocks during esp_wifi_init(); if the ladder tops out
+ * below what Wi-Fi asks for, that is the -12 root cause.
+ */
+
+static void bsp_probe_ladder(const char *tag)
+{
+  static const uint32_t sizes[] =
+    {
+      4096, 16384, 32768, 65536, 131072, 262144
+    };
+
+  unsigned i;
+
+  for (i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++)
+    {
+      void *p = malloc(sizes[i]);
+      const char *where;
+
+      if (p == NULL)
+        {
+          where = "FAIL";
+        }
+      else if (bsp_ptr_in_psram(p))
+        {
+          where = "PSRAM";
+        }
+      else
+        {
+          where = "INT";
+        }
+
+      ets_printf("[BSP] ladder[%s]: %6u -> %s\n", tag, sizes[i], where);
+
+      if (p != NULL)
+        {
+          free(p);
+        }
+    }
+}
+
 static void bsp_probe_alloc(const char *tag)
 {
   void *big   = malloc(1024u * 1024u);
@@ -270,6 +326,8 @@ static void bsp_probe_alloc(const char *tag)
     {
       free(small);
     }
+
+  bsp_probe_ladder(tag);
 }
 
 int esp_board_initialize(void)

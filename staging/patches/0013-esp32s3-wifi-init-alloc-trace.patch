@@ -1,0 +1,458 @@
+AI-VOX3: trace every Wi-Fi init allocation so the -12 root cause is visible
+===========================================================================
+
+WHY THIS PATCH EXISTS
+=====================
+
+esp32s3_wlan_sta_initialize() still fails with -12 (-ENOMEM) after 0012
+(verified on real hardware, run#137 / run#138).  run#138 proved the failure is
+NOT total-heap exhaustion:
+
+    [BSP] alloc[pre-wlan]:  1MB=OK 4KB=OK      <- 8MB PSRAM is in the heap
+    [BSP] -> wlan_sta_initialize
+    [BSP] <- wlan_sta_initialize ret=-12        <- but Wi-Fi still starves
+    [BSP] alloc[post-wlan]: 1MB=OK 4KB=OK
+
+So the failing request is either (a) an INTERNAL-SRAM-only allocation that the
+allocator can no longer satisfy contiguously, or (b) a task/queue creation
+failure inside the pre-compiled IDF Wi-Fi library.  Both are invisible today:
+
+  * the library reports failure through wifi_osi_funcs_t callbacks, and
+  * its own logs are dropped by esp_log_writev_wrapper() because
+    max_level = ESP_LOG_NONE unless CONFIG_DEBUG_WIRELESS_{INFO,WARN,ERROR}
+    is defined -- and that symbol exists in NO Kconfig of this tree, so it
+    can never be enabled from a defconfig (olddefconfig silently ignores it).
+
+This patch turns the lights on, purely additive, zero behaviour change:
+
+  1. esp_log_write_wrapper / esp_log_writev_wrapper: max_level ERROR instead
+     of NONE (CONFIG_DEBUG_WIRELESS_ERROR still wins when it is ever defined).
+  2. A g_wifi_alloc_trace flag, enabled only around esp_wifi_init() inside
+     esp_wifi_adapter_init(), so no runtime cost outside Wi-Fi bring-up.
+  3. Trace lines ([WA] prefix, ets_printf -- syslog/nerr does NOT reach the
+     console on this build) in every allocation / task / queue callback the
+     IDF library can call:
+        esp_malloc_internal, esp_calloc_internal, esp_zalloc_internal,
+        esp_realloc_internal, esp_malloc, esp_wifi_malloc, esp_wifi_calloc,
+        esp_wifi_zalloc, esp_wifi_realloc, esp_wifi_create_queue,
+        esp_queue_create, esp_semphr_create, esp_mutex_create,
+        esp_task_create_pinned_to_core
+     Each line prints the requested size, the returned pointer, and whether it
+     came from internal SRAM (INT) or PSRAM (PSRAM), or FAILED.
+  4. esp_wifi_init() (esp32s3_wireless.c): phase markers, so if every
+     allocation succeeds we still learn WHICH of coex_init /
+     esp_wifi_init_internal / esp_phy_modem_init / esp_supplicant_init
+     returns the error.
+
+EXPECTED OUTCOME (run#139)
+==========================
+
+Either one callback prints FAIL with a size -- that size is the internal-SRAM
+requirement Wi-Fi cannot meet, and the fix follows directly (reduce the
+matching CONFIG_ESP32S3_WIFI_* buffer count, or free internal DRAM); or all
+allocations succeed and a phase marker prints FAILED -- then the problem is
+inside the library proper and we attack it from a different angle.
+
+To be removed once the root cause is fixed.
+
+--- a/arch/xtensa/src/esp32s3/esp32s3_wifi_adapter.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_wifi_adapter.c
+@@ -140,6 +140,30 @@
+ 
+ #define ESP_MAX_PRIORITIES (25)
+ 
++/* -------------------------------------------------------------------------
++ * AI-VOX3 Wi-Fi init forensics (run#139)
++ *
++ * esp32s3_wlan_sta_initialize() fails with -12 (-ENOMEM) and the pre-compiled
++ * IDF Wi-Fi library gives no clue which internal allocation fails: its logs
++ * are dropped by esp_log_writev_wrapper() (max_level = ESP_LOG_NONE unless
++ * CONFIG_DEBUG_WIRELESS_* is defined, and that symbol exists in no Kconfig).
++ * Every allocation the library performs goes through the wifi_osi_funcs_t
++ * callbacks below, so we trace them all while esp_wifi_init() runs.
++ * -------------------------------------------------------------------------
++ */
++
++static volatile int g_wifi_alloc_trace;
++
++#define WIFI_ALLOC_TRACE(fmt, ...) \
++  do \
++    { \
++      if (g_wifi_alloc_trace) \
++        { \
++          ets_printf("[WA] " fmt "\n", ##__VA_ARGS__); \
++        } \
++    } \
++  while (0)
++
+ /****************************************************************************
+  * Private Types
+  ****************************************************************************/
+@@ -1050,6 +1074,7 @@
+   sem = kmm_malloc(tmp);
+   if (!sem)
+     {
++      ets_printf("[WA] semphr_create FAIL (kmm_malloc %d)\n", tmp);
+       wlerr("Failed to alloc %d memory\n", tmp);
+       return NULL;
+     }
+@@ -1057,11 +1082,13 @@
+   ret = nxsem_init(sem, 0, init);
+   if (ret)
+     {
++      ets_printf("[WA] semphr_create FAIL (nxsem_init %d)\n", ret);
+       wlerr("Failed to initialize sem error=%d\n", ret);
+       kmm_free(sem);
+       return NULL;
+     }
+ 
++  WIFI_ALLOC_TRACE("semphr_create(init=%u) OK %p", init, sem);
+   return sem;
+ }
+ 
+@@ -1238,6 +1265,7 @@
+   mutex = kmm_malloc(tmp);
+   if (!mutex)
+     {
++      ets_printf("[WA] mutex_create FAIL (kmm_malloc %d)\n", tmp);
+       wlerr("Failed to alloc %d memory\n", tmp);
+       return NULL;
+     }
+@@ -1245,11 +1273,13 @@
+   ret = pthread_mutex_init(mutex, NULL);
+   if (ret)
+     {
++      ets_printf("[WA] mutex_create FAIL (pthread_mutex_init %d)\n", ret);
+       wlerr("Failed to initialize mutex error=%d\n", ret);
+       kmm_free(mutex);
+       return NULL;
+     }
+ 
++  WIFI_ALLOC_TRACE("mutex_create OK %p", mutex);
+   return mutex;
+ }
+ 
+@@ -1409,6 +1439,8 @@
+   mq_adpt = kmm_malloc(sizeof(struct mq_adpt));
+   if (!mq_adpt)
+     {
++      ets_printf("[WA] queue_create(%u x %u) FAIL (kmm_malloc)\n",
++                 queue_len, item_size);
+       wlerr("Failed to kmm_malloc\n");
+       return NULL;
+     }
+@@ -1425,11 +1457,15 @@
+                      O_RDWR | O_CREAT, 0644, &attr);
+   if (ret < 0)
+     {
++      ets_printf("[WA] queue_create(%u x %u) FAIL (file_mq_open %d)\n",
++                 queue_len, item_size, ret);
+       wlerr("Failed to create mqueue\n");
+       kmm_free(mq_adpt);
+       return NULL;
+     }
+ 
++  WIFI_ALLOC_TRACE("queue_create(%u x %u) OK %p",
++                   queue_len, item_size, mq_adpt);
+   mq_adpt->msgsize = item_size;
+ 
+   return (void *)mq_adpt;
+@@ -1823,6 +1859,8 @@
+                        (char * const *)param);
+   if (pid > 0)
+     {
++      WIFI_ALLOC_TRACE("task_create(\"%s\") OK pid=%d stack=%u",
++                       name, pid, (unsigned)stack_depth);
+       if (task_handle != NULL)
+         {
+           *((int *)task_handle) = pid;
+@@ -1843,6 +1881,8 @@
+     }
+   else
+     {
++      ets_printf("[WA] task_create(\"%s\") FAIL stack=%u\n",
++                 name, (unsigned)stack_depth);
+       wlerr("Failed to create task\n");
+     }
+ 
+@@ -1995,7 +2035,12 @@
+ 
+ static void *esp_malloc(uint32_t size)
+ {
+-  return kmm_malloc(size);
++  void *ptr = kmm_malloc(size);
++  WIFI_ALLOC_TRACE("malloc(%u) -> %p%s",
++                   (unsigned)size, ptr,
++                   ptr == NULL ? " FAIL" :
++                   (esp32s3_ptr_extram(ptr) ? " PSRAM" : " INT"));
++  return ptr;
+ }
+ 
+ /****************************************************************************
+@@ -3298,7 +3343,7 @@
+ #elif defined (CONFIG_DEBUG_WIRELESS_ERROR)
+   max_level = ESP_LOG_ERROR;
+ #else
+-  max_level = ESP_LOG_NONE;
++  max_level = ESP_LOG_ERROR; /* AI-VOX3: was ESP_LOG_NONE (logs all dropped) */
+ #endif
+ 
+   if (level <= max_level)
+@@ -3336,7 +3381,7 @@
+ #elif defined (CONFIG_DEBUG_WIRELESS_ERROR)
+   max_level = ESP_LOG_ERROR;
+ #else
+-  max_level = ESP_LOG_NONE;
++  max_level = ESP_LOG_ERROR; /* AI-VOX3: was ESP_LOG_NONE (logs all dropped) */
+ #endif
+ 
+   if (level <= max_level)
+@@ -3387,17 +3432,25 @@
+       ptr = kmm_malloc(size);
+       if (ptr == NULL)
+         {
++          WIFI_ALLOC_TRACE("malloc_internal(%u) FAIL (kmm_malloc NULL)",
++                           (unsigned)size);
+           return NULL;
+         }
+ 
+       if (!esp32s3_ptr_extram(ptr))
+         {
++          WIFI_ALLOC_TRACE("malloc_internal(%u) INT %p (try %d)",
++                           (unsigned)size, ptr, retry);
+           return ptr;   /* internal SRAM: exactly what DMA needs */
+         }
+ 
++      WIFI_ALLOC_TRACE("malloc_internal(%u) got PSRAM %p, retrying",
++                       (unsigned)size, ptr);
+       kmm_free(ptr);    /* external RAM: not usable, try again */
+     }
+ 
++  WIFI_ALLOC_TRACE("malloc_internal(%u) FAIL (only PSRAM after %d tries)",
++                   (unsigned)size, ESP_WIFI_IRAM_ALLOC_RETRIES);
+   return NULL;
+ #endif
+ }
+@@ -3438,10 +3491,14 @@
+     {
+       if (esp32s3_ptr_extram(new_ptr))
+         {
++          WIFI_ALLOC_TRACE("realloc_internal(%u) FAIL (PSRAM %p)",
++                           (unsigned)size, new_ptr);
+           kmm_free(new_ptr);
+           return NULL;
+         }
+ 
++      WIFI_ALLOC_TRACE("realloc_internal(%u) INT %p",
++                       (unsigned)size, new_ptr);
+       old_size = kmm_malloc_size(old_ptr);
+       DEBUGASSERT(old_size > 0);
+       memcpy(new_ptr, old_ptr, MIN(old_size, size));
+@@ -3449,6 +3506,8 @@
+       return new_ptr;
+     }
+ 
++  WIFI_ALLOC_TRACE("realloc_internal(%u) FAIL (kmm_malloc NULL)",
++                   (unsigned)size);
+   return NULL;
+ #endif
+ }
+@@ -3480,9 +3539,19 @@
+     {
+       if (esp32s3_ptr_extram(ptr))
+         {
++          WIFI_ALLOC_TRACE("calloc_internal(%u x %u) FAIL (PSRAM %p)",
++                           (unsigned)n, (unsigned)size, ptr);
+           kmm_free(ptr);
+           return NULL;
+         }
++
++      WIFI_ALLOC_TRACE("calloc_internal(%u x %u) INT %p",
++                       (unsigned)n, (unsigned)size, ptr);
++    }
++  else
++    {
++      WIFI_ALLOC_TRACE("calloc_internal(%u x %u) FAIL (kmm_calloc NULL)",
++                       (unsigned)n, (unsigned)size);
+     }
+ 
+   return ptr;
+@@ -3515,9 +3584,19 @@
+     {
+       if (esp32s3_ptr_extram(ptr))
+         {
++          WIFI_ALLOC_TRACE("zalloc_internal(%u) FAIL (PSRAM %p)",
++                           (unsigned)size, ptr);
+           kmm_free(ptr);
+           return NULL;
+         }
++
++      WIFI_ALLOC_TRACE("zalloc_internal(%u) INT %p",
++                       (unsigned)size, ptr);
++    }
++  else
++    {
++      WIFI_ALLOC_TRACE("zalloc_internal(%u) FAIL (kmm_zalloc NULL)",
++                       (unsigned)size);
+     }
+ 
+   return ptr;
+@@ -3540,7 +3619,12 @@
+ 
+ static void *esp_wifi_malloc(size_t size)
+ {
+-  return kmm_malloc(size);
++  void *ptr = kmm_malloc(size);
++  WIFI_ALLOC_TRACE("wifi_malloc(%u) -> %p%s",
++                   (unsigned)size, ptr,
++                   ptr == NULL ? " FAIL" :
++                   (esp32s3_ptr_extram(ptr) ? " PSRAM" : " INT"));
++  return ptr;
+ }
+ 
+ /****************************************************************************
+@@ -3560,7 +3644,12 @@
+ 
+ static void *esp_wifi_realloc(void *ptr, size_t size)
+ {
+-  return kmm_realloc(ptr, size);
++  void *new_ptr = kmm_realloc(ptr, size);
++  WIFI_ALLOC_TRACE("wifi_realloc(%p, %u) -> %p%s",
++                   ptr, (unsigned)size, new_ptr,
++                   new_ptr == NULL ? " FAIL" :
++                   (esp32s3_ptr_extram(new_ptr) ? " PSRAM" : " INT"));
++  return new_ptr;
+ }
+ 
+ /****************************************************************************
+@@ -3580,7 +3669,12 @@
+ 
+ static void *esp_wifi_calloc(size_t n, size_t size)
+ {
+-  return kmm_calloc(n, size);
++  void *ptr = kmm_calloc(n, size);
++  WIFI_ALLOC_TRACE("wifi_calloc(%u x %u) -> %p%s",
++                   (unsigned)n, (unsigned)size, ptr,
++                   ptr == NULL ? " FAIL" :
++                   (esp32s3_ptr_extram(ptr) ? " PSRAM" : " INT"));
++  return ptr;
+ }
+ 
+ /****************************************************************************
+@@ -3599,7 +3693,12 @@
+ 
+ static void *esp_wifi_zalloc(size_t size)
+ {
+-  return kmm_zalloc(size);
++  void *ptr = kmm_zalloc(size);
++  WIFI_ALLOC_TRACE("wifi_zalloc(%u) -> %p%s",
++                   (unsigned)size, ptr,
++                   ptr == NULL ? " FAIL" :
++                   (esp32s3_ptr_extram(ptr) ? " PSRAM" : " INT"));
++  return ptr;
+ }
+ 
+ /****************************************************************************
+@@ -3624,6 +3723,8 @@
+   wifi_queue = kmm_malloc(sizeof(wifi_static_queue_t));
+   if (!wifi_queue)
+     {
++      ets_printf("[WA] wifi_create_queue(%d x %d) FAIL (kmm_malloc)\n",
++                 queue_len, item_size);
+       wlerr("Failed to kmm_malloc\n");
+       return NULL;
+     }
+@@ -3631,11 +3732,15 @@
+   wifi_queue->handle = esp_queue_create(queue_len, item_size);
+   if (!wifi_queue->handle)
+     {
++      ets_printf("[WA] wifi_create_queue(%d x %d) FAIL (esp_queue_create)\n",
++                 queue_len, item_size);
+       wlerr("Failed to create queue\n");
+       kmm_free(wifi_queue);
+       return NULL;
+     }
+ 
++  WIFI_ALLOC_TRACE("wifi_create_queue(%d x %d) OK %p",
++                   queue_len, item_size, wifi_queue);
+   return wifi_queue;
+ }
+ 
+@@ -4695,7 +4800,15 @@
+   wifi_cfg.dynamic_rx_buf_num = CONFIG_ESP32S3_WIFI_DYNAMIC_RXBUF_NUM;
+   wifi_cfg.dynamic_tx_buf_num = CONFIG_ESP32S3_WIFI_DYNAMIC_TXBUF_NUM;
+ 
++  g_wifi_alloc_trace = 1;
++  ets_printf("[WA] esp_wifi_init enter (rx_buf=%d/%d tx_buf=%d ba_win=%d)\n",
++             CONFIG_ESP32S3_WIFI_STATIC_RXBUF_NUM,
++             CONFIG_ESP32S3_WIFI_DYNAMIC_RXBUF_NUM,
++             CONFIG_ESP32S3_WIFI_DYNAMIC_TXBUF_NUM,
++             CONFIG_ESP32S3_WIFI_RXBA_AMPDU_WZ);
+   ret = esp_wifi_init(&wifi_cfg);
++  g_wifi_alloc_trace = 0;
++  ets_printf("[WA] esp_wifi_init ret=%d\n", ret);
+   if (ret)
+     {
+       wlerr("Failed to initialize Wi-Fi error=%d\n", ret);
+--- a/arch/xtensa/src/esp32s3/esp32s3_wireless.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_wireless.c
+@@ -99,6 +99,13 @@
+                                 esp_phy_calibration_mode_t cal_mode);
+ extern uint32_t crc32_le(uint32_t crc, uint8_t const *buf, uint32_t len);
+ 
++/* AI-VOX3 Wi-Fi init forensics (run#139): ungalog console output so we can
++ * tell which phase of esp_wifi_init() returns ESP_ERR_NO_MEM.  syslog/nerr
++ * does not reach the console on this build; ets_printf does.
++ */
++
++extern int ets_printf(const char *fmt, ...);
++
+ /****************************************************************************
+  * Private Data
+  ****************************************************************************/
+@@ -1372,13 +1379,18 @@
+   esp_wifi_set_keep_alive_time(keep_alive_time_us);
+   esp_wifi_set_sleep_wait_broadcast_data_time(wait_broadcast_data_time_us);
+ 
++  ets_printf("[WA] esp_wifi_init: enter\n");
++
+ #ifdef CONFIG_ESP32S3_WIFI_BT_COEXIST
+   ret = coex_init();
+   if (ret)
+     {
++      ets_printf("[WA] esp_wifi_init: coex_init FAILED ret=%d\n", ret);
+       wlerr("ERROR: Failed to initialize coex error=%d\n", ret);
+       return ret;
+     }
++
++  ets_printf("[WA] esp_wifi_init: coex_init OK\n");
+ #endif /* CONFIG_ESP32S3_WIFI_BT_COEXIST */
+ 
+   esp_wifi_set_log_level();
+@@ -1387,20 +1399,26 @@
+   ret = esp_wifi_init_internal(config);
+   if (ret)
+     {
++      ets_printf("[WA] esp_wifi_init: init_internal FAILED ret=%d\n", ret);
+       wlerr("Failed to initialize Wi-Fi error=%d\n", ret);
+       return ret;
+     }
+ 
++  ets_printf("[WA] esp_wifi_init: init_internal OK\n");
++
+   esp_phy_modem_init();
+ 
+   ret = esp_supplicant_init();
+   if (ret)
+     {
++      ets_printf("[WA] esp_wifi_init: supplicant_init FAILED ret=%d\n", ret);
+       wlerr("Failed to initialize WPA supplicant error=%d\n", ret);
+       esp_wifi_deinit_internal();
+       return ret;
+     }
+ 
++  ets_printf("[WA] esp_wifi_init: supplicant_init OK\n");
++
+   return 0;
+ }
+ 

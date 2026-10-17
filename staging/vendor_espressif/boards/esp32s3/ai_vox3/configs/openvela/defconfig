@@ -398,7 +398,11 @@ CONFIG_AIVOX3_LLM_API_KEY="tp-ctp2uwfqldr8xivbovhbqffnfmnuho3hlrbyysmlql9l28a2"
 # Same convention as the LLM key above: build-time config, never a literal in
 # a .c file.  Empty => net_init() fails fast with a syslog reason (no hang).
 CONFIG_AIVOX3_WIFI_SSID="3124"
-CONFIG_AIVOX3_WIFI_PASSWORD="rczzzhr312"
+# 2026-10-17: user-supplied credential.  NOTE this used to be "rczzzhr312"
+# (an 'r' where the real passphrase has an 'l') -- a silent typo that would
+# have failed WPA2 association only AFTER the -12 fix landed, i.e. exactly
+# the kind of bug that looks like "Wi-Fi still broken" one round later.
+CONFIG_AIVOX3_WIFI_PASSWORD="rczzzhl312"
 
 # --- PC voice bridge ---------------------------------------------------------
 # Host running toolchain/voice_bridge/bridge_chat.py.  Home routers hand out
