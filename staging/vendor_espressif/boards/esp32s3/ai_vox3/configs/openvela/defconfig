@@ -58,33 +58,27 @@ CONFIG_ESP32S3_FLASH_16M=y
 # 0x6E8000) and wiped the entry code.  With PADDING relocated clear of the
 # code segment the spin cause is gone, so PSRAM can safely come back on.
 #
-# ★ CONFIG_ESP32S3_SPIRAM_COMMON_HEAP MUST STAY OFF (2026-10-17, 真机实证) ★
-# This symbol is what makes xtensa_add_region() fold the 8 MB PSRAM into the
-# ordinary kernel heap (arch/xtensa/src/esp32s3/esp32s3_allocateheap.c:223-233).
-# With it ON, Wi-Fi dies: esp_malloc_internal()
-# (arch/xtensa/src/esp32s3/esp32s3_wifi_adapter.c:3352-3371) allocates with
-# kmm_malloc(), then REJECTS the block when it lands in external RAM --
-#     if (esp32s3_ptr_extram(ptr)) { kmm_free(ptr); return NULL; }
-# Wi-Fi's DMA buffers must live in internal SRAM, so every allocation that
-# happens to come from the 8 MB PSRAM region is freed and NULL is returned,
-# and esp_wifi_init() fails with ESP_ERR_NO_MEM -> wifi_errno_trans() ->
-# -ENOMEM -> "wlan_sta_initialize ret=-12".
+# ★ SPIRAM_COMMON_HEAP cannot simply be turned OFF (2026-10-17) ★
+# arch/xtensa/src/esp32s3/Kconfig:1025-1040 declares a *choice*
+# ESP32S3_SPIRAM_HEAP whose only two members are
+#   ESP32S3_SPIRAM_COMMON_HEAP  (default for BUILD_FLAT)
+#   ESP32S3_SPIRAM_USER_HEAP    (protected build; selects MM_KERNEL_HEAP)
+# so in a flat build a choice ALWAYS resolves to COMMON_HEAP.  Writing
+# "# CONFIG_ESP32S3_SPIRAM_COMMON_HEAP is not set" in a defconfig does not
+# deselect a choice -- olddefconfig restores the default and the CI config
+# audit still sees =y.  This was verified on run#136: the audit printed
+# "CONFIG AUDIT OK" with COMMON_HEAP=y even though the defconfig said
+# "is not set".
 #
-# Proof: with SPIRAM_COMMON_HEAP=y the board really did reach this state
-# (run#135, PSRAM hardware confirmed inited=1, 8 MB window, mm_regions=2)
-# and STILL returned -12.  The official PSRAM+Wi-Fi reference config
-# boards/xtensa/esp32s3/esp32s3-eye/configs/wifi/defconfig sets
-# CONFIG_ESP32S3_SPIRAM=y + MODE_OCT=y + CONFIG_MM_REGIONS=2 but pointedly
-# does NOT set SPIRAM_COMMON_HEAP -- for exactly this reason.
-#
-# Cost of leaving it off: the ordinary heap is internal-SRAM-only (~270 KB),
-# so AIVOX3_TTS_PCM_MAX_BYTES (768 KB) cannot be malloc'd.  The TTS path
-# must therefore be size-bounded or chunked -- do NOT "fix" this by turning
-# SPIRAM_COMMON_HEAP back on.
+# The real fix for the Wi-Fi -12 (ENOMEM) is therefore NOT here but in the
+# kernel patch staging/patches/0012-*: esp_malloc_internal() must retry
+# from internal SRAM when kmm_malloc() hands back a PSRAM block.  See that
+# patch for the full root-cause chain.  Do not try to "fix" -12 by editing
+# this block.
 CONFIG_ESP32S3_SPIRAM=y
 CONFIG_ESP32S3_SPIRAM_MODE_OCT=y
 CONFIG_ESP32S3_SPIRAM_BOOT_INIT=y
-# CONFIG_ESP32S3_SPIRAM_COMMON_HEAP is not set
+CONFIG_ESP32S3_SPIRAM_COMMON_HEAP=y
 
 # --- ROOT CAUSE of wlan_sta_initialize -12 (ENOMEM) -------------------------
 # The four symbols above only make the *hardware* PSRAM work.  They do NOT

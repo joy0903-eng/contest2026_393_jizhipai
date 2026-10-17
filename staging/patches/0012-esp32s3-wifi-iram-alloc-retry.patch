@@ -1,0 +1,132 @@
+Fix Wi-Fi -12 (ENOMEM) on AI-VOX3: retry esp_malloc_internal() from internal
+SRAM instead of failing when kmm_malloc() returns a PSRAM block.
+
+===========================================================================
+ROOT CAUSE (verified against real hardware, run#135)
+===========================================================================
+
+Symptom: esp32s3_wlan_sta_initialize() returns -12 (-ENOMEM); the board gets
+no IP and can never reach the PC voice bridge.  Call chain:
+
+  esp32s3_wlan_sta_initialize()     arch/xtensa/src/esp32s3/esp32s3_wlan.c:1663
+    -> esp_wifi_adapter_init()      arch/xtensa/src/esp32s3/esp32s3_wifi_adapter.c:4625
+      -> esp_wifi_init(&wifi_cfg)   returns ESP_ERR_NO_MEM
+        -> wifi_errno_trans()       same file, :615  ->  -ENOMEM
+
+Wi-Fi allocates its DMA buffers through esp_malloc_internal().  In a flat
+build (no CONFIG_MM_KERNEL_HEAP, no CONFIG_XTENSA_IMEM_USE_SEPARATE_HEAP) that
+function used to be:
+
+    void *ptr = kmm_malloc(size);
+    if (ptr != NULL)
+      {
+        if (esp32s3_ptr_extram(ptr))
+          {
+            kmm_free(ptr);
+            return NULL;          <-- gives up after ONE attempt
+          }
+      }
+    return ptr;
+
+Wi-Fi DMA buffers MUST live in internal SRAM.  With
+CONFIG_ESP32S3_SPIRAM_COMMON_HEAP=y (which is forced: ESP32S3_SPIRAM_HEAP is a
+choice whose flat-build default is COMMON_HEAP -- esp32s3/Kconfig:1025-1040)
+the 8 MB PSRAM is folded into the ordinary heap, so kmm_malloc() very often
+hands back a PSRAM block.  That block is rejected as external RAM, freed, and
+NULL returned -> esp_wifi_init() sees ESP_ERR_NO_MEM -> -ENOMEM.
+
+The bigger the heap, the more likely a PSRAM block is chosen, so "enabling
+PSRAM" made Wi-Fi LESS likely to work -- a self-defeating knot.
+
+===========================================================================
+WHY NOT JUST TURN SPIRAM_COMMON_HEAP OFF
+===========================================================================
+
+It is a choice and cannot be deselected in a flat build.  Writing
+"# CONFIG_ESP32S3_SPIRAM_COMMON_HEAP is not set" in the defconfig does not
+deselect a choice: olddefconfig restores the default and the CI config audit
+still sees =y.  Verified on run#136, which printed "CONFIG AUDIT OK" with
+COMMON_HEAP=y even though the defconfig said "is not set".
+
+===========================================================================
+THE FIX
+===========================================================================
+
+Retry: when kmm_malloc() returns a PSRAM block, free it and ask again, up to
+ESP_WIFI_IRAM_ALLOC_RETRIES (64) times.  Internal-SRAM blocks are returned
+immediately.  The loop is strictly bounded so it can never wedge the boot
+(this runs during board init).
+
+If every attempt still lands in PSRAM we return NULL exactly as before, so the
+failure mode is unchanged (loud -ENOMEM) rather than silently wrong.
+
+On success Wi-Fi gets exactly the DMA-capable buffer it requires, while the
+8 MB PSRAM stays in the ordinary heap for the application -- which needs it
+for the 768 KB TTS PCM sink (AIVOX3_TTS_PCM_MAX_BYTES).
+
+Generated from a real edit and validated with BOTH `git apply --check` and
+`patch -p1 --dry-run --forward` (CI uses `patch -p1`).
+--- a/arch/xtensa/src/esp32s3/esp32s3_wifi_adapter.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_wifi_adapter.c
+@@ -92,6 +92,19 @@
+  * Pre-processor Definitions
+  ****************************************************************************/
+ 
++/* AI-VOX3 FIX (2026-10-17): how many times esp_malloc_internal() retries
++ * after kmm_malloc() hands back a PSRAM (external RAM) block.  Wi-Fi DMA
++ * buffers must live in internal SRAM, and with the 8 MB PSRAM folded into
++ * the ordinary heap a single attempt very often lands in external RAM --
++ * which used to abort the whole Wi-Fi init with -ENOMEM.  64 attempts is
++ * generous (each is a cheap alloc/free pair) yet strictly bounded, so a
++ * pathological allocator can never wedge the boot.
++ */
++
++#ifndef ESP_WIFI_IRAM_ALLOC_RETRIES
++#  define ESP_WIFI_IRAM_ALLOC_RETRIES 64
++#endif
++
+ #define PHY_RF_MASK   ((1 << PHY_BT_MODULE) | (1 << PHY_WIFI_MODULE))
+ 
+ #define WIFI_CONNECT_TIMEOUT  CONFIG_ESP32S3_WIFI_CONNECT_TIMEOUT
+@@ -3356,18 +3369,36 @@
+ #elif defined(CONFIG_XTENSA_IMEM_USE_SEPARATE_HEAP)
+   return xtensa_imm_malloc(size);
+ #else
+-  void *ptr = kmm_malloc(size);
++  /* AI-VOX3 FIX (2026-10-17): Wi-Fi's DMA buffers must come from internal
++   * SRAM.  With the 8 MB PSRAM folded into the ordinary heap
++   * (CONFIG_ESP32S3_SPIRAM_COMMON_HEAP) kmm_malloc() frequently returns a
++   * PSRAM block, which used to be freed and reported as a hard failure --
++   * esp_wifi_init() then died with ESP_ERR_NO_MEM and
++   * esp32s3_wlan_sta_initialize() returned -12.  Retry instead: free the
++   * external block and ask again, so the allocator gets a chance to serve
++   * the request from internal SRAM.  Bounded, so it cannot wedge boot.
++   */
++
++  int  retry;
++  void *ptr;
+ 
+-  if (ptr != NULL)
++  for (retry = 0; retry < ESP_WIFI_IRAM_ALLOC_RETRIES; retry++)
+     {
+-      if (esp32s3_ptr_extram(ptr))
++      ptr = kmm_malloc(size);
++      if (ptr == NULL)
+         {
+-          kmm_free(ptr);
+           return NULL;
+         }
++
++      if (!esp32s3_ptr_extram(ptr))
++        {
++          return ptr;   /* internal SRAM: exactly what DMA needs */
++        }
++
++      kmm_free(ptr);    /* external RAM: not usable, try again */
+     }
+ 
+-  return ptr;
++  return NULL;
+ #endif
+ }
+ 
