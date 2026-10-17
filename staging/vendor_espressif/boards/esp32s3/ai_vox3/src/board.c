@@ -22,6 +22,7 @@
 #include <nuttx/lcd/lcd_dev.h>
 
 #include <stdint.h>
+#include <stdlib.h>
 
 #include <debug.h>
 #include <syslog.h>
@@ -231,6 +232,46 @@ static void bsp_dump_heap(const char *tag)
 #endif
 }
 
+/****************************************************************************
+ * Name: bsp_probe_alloc
+ *
+ * Description:
+ *   Probe what the allocator can actually hand out right now, at O(1)-ish
+ *   cost.  NEVER call mallinfo()/kmm_mallinfo() here -- that walks the whole
+ *   chunk list and wedged the board on run#134 (see bsp_dump_heap).
+ *
+ *   Two probes, because the two heap regions behave differently:
+ *     big   (1 MB) -- only satisfiable from the 8 MB PSRAM region.  If this
+ *                     fails the PSRAM is NOT in the heap, whatever the
+ *                     config says.
+ *     small (4 KB) -- satisfiable from internal SRAM.  If THIS fails the
+ *                     internal heap is exhausted, which is exactly the
+ *                     condition Wi-Fi's DMA buffers hit.
+ *
+ *   Each probe is freed immediately, so this perturbs nothing.
+ *
+ ****************************************************************************/
+
+static void bsp_probe_alloc(const char *tag)
+{
+  void *big   = malloc(1024u * 1024u);
+  void *small = malloc(4096);
+
+  ets_printf("[BSP] alloc[%s]: 1MB=%s 4KB=%s\n", tag,
+             big != NULL ? "OK" : "FAIL",
+             small != NULL ? "OK" : "FAIL");
+
+  if (big != NULL)
+    {
+      free(big);
+    }
+
+  if (small != NULL)
+    {
+      free(small);
+    }
+}
+
 int esp_board_initialize(void)
 {
   int ret = OK;
@@ -242,6 +283,7 @@ int esp_board_initialize(void)
    * PSRAM is in the heap at all (see bsp_dump_heap above). */
 
   bsp_dump_heap("pre-wlan");
+  bsp_probe_alloc("pre-wlan");
 
   ets_printf("[BSP] -> wlan_sta_initialize\n");
   ret = esp32s3_wlan_sta_initialize();
@@ -254,6 +296,7 @@ int esp_board_initialize(void)
   /* And after, so the Wi-Fi driver's actual footprint is visible. */
 
   bsp_dump_heap("post-wlan");
+  bsp_probe_alloc("post-wlan");
 #endif
 
   ets_printf("[BSP] past wlan block\n");
