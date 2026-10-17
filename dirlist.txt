@@ -1,0 +1,26 @@
+total 520
+drwxr-xr-x  16 runner runner   4096 Oct 17 05:05 .
+drwxr-xr-x   4 runner runner   4096 Oct 17 05:05 ..
+drwxr-xr-x   2 runner runner   4096 Oct 17 05:04 .cargo
+drwxr-xr-x   6 runner runner   4096 Oct 17 04:59 .claude
+drwxr-xr-x   7 runner runner   4096 Oct 17 05:04 .repo
+drwxr-xr-x  36 runner runner   4096 Oct 17 05:05 apps
+-rw-r--r--   1 runner runner   3118 Oct 17 05:05 binlist.txt
+drwxr-xr-x   7 runner runner   4096 Oct 17 04:59 build
+-rw-r--r--   1 runner runner 424589 Oct 17 05:05 build.log
+lrwxrwxrwx   1 runner runner     20 Oct 17 04:59 build.sh -> nuttx/tools/build.sh
+-rw-r--r--   1 runner runner      2 Oct 17 05:05 build_rc.txt
+-rw-r--r--   1 runner runner  20335 Oct 17 05:05 collect.log
+drwxr-xr-x   8 runner runner   4096 Oct 17 04:59 docs
+lrwxrwxrwx   1 runner runner     36 Oct 17 04:59 emulator.sh -> prebuilts/emulator/tools/emulator.sh
+drwxr-xr-x 126 runner runner   4096 Oct 17 05:04 external
+drwxr-xr-x   2 runner runner   4096 Oct 17 05:05 firmware
+drwxr-xr-x  10 runner runner   4096 Oct 17 05:04 frameworks
+-rw-r--r--   1 runner runner    464 Oct 17 04:59 init.log
+drwxr-xr-x  28 runner runner   4096 Oct 17 05:05 nuttx
+drwxr-xr-x   8 runner runner   4096 Oct 17 05:04 packages
+drwxr-xr-x   9 runner runner   4096 Oct 17 05:01 prebuilts
+-rw-r--r--   1 runner runner   3546 Oct 17 05:05 segcount.txt
+-rw-r--r--   1 runner runner    161 Oct 17 05:04 sync.log
+drwxr-xr-x   9 runner runner   4096 Oct 17 05:01 tests
+drwxr-xr-x  21 runner runner   4096 Oct 17 05:04 vendor
