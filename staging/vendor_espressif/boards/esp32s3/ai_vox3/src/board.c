@@ -21,12 +21,6 @@
 #include <nuttx/kthread.h>
 #include <nuttx/lcd/lcd_dev.h>
 
-/* struct mallinfo / mallinfo() live in <malloc.h>; <nuttx/mm/mm.h> only
- * carries kmm_mallinfo() (used when CONFIG_MM_KERNEL_HEAP is in play). */
-
-#include <malloc.h>
-#include <nuttx/mm/mm.h>
-
 #include <stdint.h>
 
 #include <debug.h>
@@ -187,48 +181,53 @@ static int periph_init_entry(int argc, char *argv[])
  * Name: bsp_dump_heap
  *
  * Description:
- *   Print the allocator's view of memory plus the PSRAM mapping.  Used to
- *   prove on real hardware whether the 8 MB OPI PSRAM actually made it into
- *   the heap, which is what decides whether esp32s3_wlan_sta_initialize()
- *   succeeds or dies with -12 (-ENOMEM).
+ *   Report, at O(1) cost only, the two facts that decide whether
+ *   esp32s3_wlan_sta_initialize() succeeds or dies with -12 (-ENOMEM):
+ *   whether the PSRAM hardware came up, and whether the allocator was
+ *   actually given the extra region.
  *
- *   `arena` is the decisive number: it is the TOTAL heap size seen by
- *   malloc().  With CONFIG_MM_REGIONS=1 the PSRAM is never added to the
- *   heap -- xtensa_add_region() (arch/xtensa/src/esp32s3/esp32s3_
- *   allocateheap.c:201) is gated on `#if CONFIG_MM_REGIONS > 1` and
- *   arch/xtensa/src/common/xtensa.h:252 turns it into an empty macro
- *   otherwise -- so arena stays at the internal-SRAM-only size even though
- *   the PSRAM hardware itself initialised fine.  With CONFIG_MM_REGIONS=2
- *   arena must come out at roughly internal SRAM + 8 MB.
+ *   Why not mallinfo(): the first version of this helper called it and
+ *   WEDGED THE BOARD -- run#134 booted to "[BSP] esp_board_initialize
+ *   enter" and then went silent forever (120 s of capture, still 79 lines).
+ *   mallinfo()/kmm_mallinfo() walks the whole heap chunk list, and with the
+ *   8 MB PSRAM region now really in the heap that walk is far too expensive
+ *   to run from board init (and on this config it appears not to terminate
+ *   at all).  Never call it from early boot again.
+ *
+ *   The decisive signals, all constant-time:
+ *     - esp_spiram_is_initialized()        : the 8 MB hardware is up
+ *     - esp_spiram_allocable_vaddr_*()      : the mapped window the
+ *                                             allocator would be handed
+ *     - CONFIG_MM_REGIONS                   : >1 means xtensa_add_region()
+ *                                             is compiled in and DID run
+ *                                             (arch/xtensa/src/esp32s3/
+ *                                             esp32s3_allocateheap.c:201,
+ *                                             gated on #if
+ *                                             CONFIG_MM_REGIONS > 1; the
+ *                                             #else branch is an empty
+ *                                             macro per xtensa.h:252)
+ *   PSRAM initialised + MM_REGIONS>1 together mean the heap really does
+ *   contain the extra ~8 MB region, which is what Wi-Fi needs.
  *
  *   Output goes through ets_printf (direct ROM console) and not syslog(),
- *   because this runs before/whether-or-not the syslog channel is usable and
- *   the relevant in-kernel diagnostics are minfo()/mwarn(), which are
- *   compiled out in this config.
+ *   because this runs before/whether-or-not the syslog channel is usable.
  *
  ****************************************************************************/
 
 static void bsp_dump_heap(const char *tag)
 {
-  struct mallinfo mi;
-
-#ifdef CONFIG_MM_KERNEL_HEAP
-  mi = kmm_mallinfo();
-#else
-  mi = mallinfo();
-#endif
-
-  ets_printf("[BSP] heap[%s]: arena=%d free=%d largest=%d used=%d\n",
-             tag, (int)mi.arena, (int)mi.fordblks, (int)mi.mxordblk,
-             (int)mi.uordblks);
-
 #ifdef CONFIG_ESP32S3_SPIRAM
-  ets_printf("[BSP] psram[%s]: inited=%d vaddr=0x%08x..0x%08x span=%d\n",
+  ets_printf("[BSP] psram[%s]: inited=%d vaddr=0x%08x..0x%08x span=%d "
+             "mm_regions=%d\n",
              tag, (int)esp_spiram_is_initialized(),
              (unsigned int)esp_spiram_allocable_vaddr_start(),
              (unsigned int)esp_spiram_allocable_vaddr_end(),
              (int)(esp_spiram_allocable_vaddr_end() -
-                   esp_spiram_allocable_vaddr_start()));
+                   esp_spiram_allocable_vaddr_start()),
+             (int)CONFIG_MM_REGIONS);
+#else
+  ets_printf("[BSP] psram[%s]: DISABLED (CONFIG_ESP32S3_SPIRAM not set) "
+             "mm_regions=%d\n", tag, (int)CONFIG_MM_REGIONS);
 #endif
 }
 
