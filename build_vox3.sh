@@ -23,6 +23,8 @@ BUILD="$WS/openvela"
 MANIFEST_BRANCH="${MANIFEST_BRANCH:-dev-ai-contest-2026}"
 SYNC_DEPTH="${SYNC_DEPTH:-1}"
 LOG="$WS/build_vox3.log"
+# GITHUB_TOKEN is provided by Actions; tolerate its absence for local runs.
+git config --global user.email "vox3-ci@users.noreply.github.com" 2>/dev/null || true
 
 # 收集到日志但不让日志淹没控制台
 exec > >(tee -a "$LOG") 2>&1
@@ -183,5 +185,71 @@ find "$BUILD/nuttx" -maxdepth 2 \
   \( -name 'nuttx.bin' -o -name 'nuttx' -o -name 'bootloader.bin' \
      -o -name 'partition-table.bin' -o -name 'nuttx.merged.bin' -o -name 'nuttx.elf' \) \
   -exec cp -v {} "$WS/firmware/" \; 2>/dev/null || true
+
+# Keep the build log next to the artifacts even when the build died early.
+cp -f "$LOG" "$WS/firmware/build_vox3.log" 2>/dev/null || true
+# Record which fixes actually made it into the tree (see the verify block in
+# step 6) so a downloader can tell a real v681 build from a stale one.
+{
+  echo "commit:   $(git -C "$WS" rev-parse HEAD 2>/dev/null)"
+  echo "trigger:  ${GITHUB_REF:-?} @ $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "--- fix markers ---"
+  grep -q "V626_XTAL32K_HANDOFF    1" "$BOARD_DIR/src/esp32s3_board_lcd.c" \
+    && echo "backlight_rtc_handoff: yes" || echo "backlight_rtc_handoff: NO"
+  grep -q "g_i2s_rx_mono" "$BUILD/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c" 2>/dev/null \
+    && echo "i2s_rx_mono: yes" || echo "i2s_rx_mono: NO"
+  [ -n "$AI_DIR" ] && { grep -q "V681_BTN_STABLE_POLLS" "$AI_DIR/src/voice/voice_channel.c" \
+    && echo "button_debounce: yes" || echo "button_debounce: NO"; }
+  echo "--- sizes ---"
+  ls -la "$WS/firmware" 2>/dev/null || true
+} > "$WS/firmware/BUILD_INFO.txt" 2>&1
+
 echo "--- firmware/ ---"; ls -la "$WS/firmware" 2>/dev/null || echo "(empty)"
+
+# ------------------------------------------------------------- publish
+# The artifact download API is not reachable from the build side's consumer,
+# so publish the tree to a branch instead: a plain `git fetch` is enough to
+# retrieve it.  A fresh clone per push keeps the history flat and avoids any
+# index conflict with the source branch.
+echo "== publish firmware to branch 'vox3-fw' =="
+PUB="$WS/.publish"
+rm -rf "$PUB"; git clone --quiet --depth 1 --branch vox3-fw "$WS" "$PUB" 2>/dev/null || {
+  git init --quiet "$PUB"
+  git -C "$PUB" remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+}
+cd "$PUB"
+git config user.name "vox3-ci"
+git config user.email "vox3-ci@users.noreply.github.com"
+if ! git remote get-url origin >/dev/null 2>&1; then
+  git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+fi
+git checkout --quiet -B vox3-fw 2>/dev/null || true
+git rm -rq --cached . 2>/dev/null || true
+cp -f "$WS"/firmware/* . 2>/dev/null || true
+git add -A
+git commit -q -m "vox3 firmware: $(date -u '+%Y-%m-%dT%H:%M:%SZ') [${GITHUB_REF:-?}]" || true
+git push --force origin vox3-fw || echo "WARN: firmware publish failed (artifact upload still attempted)"
+
+# ---------------------------------------------------------------- publish log
+# On any early exit (set -e, missing board, build failure) publish the log so
+# the failure is diagnosable without opening the Actions UI.
+vox3_publish_log() {
+  local rc=$?
+  local PUB2="$WS/.publish_log"
+  echo "== vox3 exiting rc=$rc -- publishing log to branch 'vox3-log' =="
+  rm -rf "$PUB2"; mkdir -p "$PUB2"
+  cp -f "$LOG" "$PUB2/build_vox3.log" 2>/dev/null || true
+  cp -f "$WS/firmware/BUILD_INFO.txt" "$PUB2/" 2>/dev/null || true
+  cd "$PUB2"
+  git init --quiet .
+  git config user.name "vox3-ci"; git config user.email "vox3-ci@users.noreply.github.com"
+  git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+  git checkout --quiet -B vox3-log 2>/dev/null || true
+  git add -A
+  git commit -q -m "vox3 build log rc=$rc $(date -u '+%Y-%m-%dT%H:%M:%SZ')" || true
+  git push --force origin vox3-log || echo "WARN: log publish failed"
+  exit $rc
+}
+trap vox3_publish_log ERR
+
 echo "== DONE =="
