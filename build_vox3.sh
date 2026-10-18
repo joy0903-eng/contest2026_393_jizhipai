@@ -104,20 +104,38 @@ echo "AI_DIR=${AI_DIR:-<not present>}"
 # ------------------------------------------------- [6] inject v681 + defconfig
 echo "== [6/7] inject v681 fixes + defconfig =="
 PATCHES="$GITHUB_WORKSPACE/patches"
-DEFCONF="$GITHUB_WORKSPACE/defconfigs/esp32s3-eye_defconfig"
+DEFCONF="$GITHUB_WORKSPACE/defconfigs/ai_vox3_defconfig"
 [ -d "$PATCHES" ] || { echo "FATAL: patches/ missing"; exit 1; }
 [ -f "$DEFCONF" ] || { echo "FATAL: defconfig missing"; exit 1; }
 
 inject() {           # inject <src> <dst>
   local src="$1" dst="$2"
   if [ ! -f "$src" ]; then echo "  SKIP (not found): $src"; return 0; fi
-  if [ ! -f "$dst" ]; then echo "  SKIP (target missing): $dst"; return 0; fi
+  if [ ! -d "$(dirname "$dst")" ]; then echo "  SKIP (no dir): $dst"; return 0; fi
   cp "$src" "$dst"
   echo "  patched: ${dst#$BUILD/}"
 }
 
+# --- board: pin map + audio codec + the two v681 fixes -----------------
+# esp32s3-eye.h MUST be overridden: upstream describes Espressif's own
+# ESP32-S3-EYE (DC=43 / BCKL=48 / SPI2 CLK=21 CS=44 MOSI=47), while the
+# AI-VOX3 wires DC=14 / BCKL=16 / SPI2 CLK=17 CS=15 MOSI=21.  Building the
+# upstream header drives unconnected GPIOs, so the backlight never lights.
+inject "$PATCHES/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3-eye.h" \
+       "$BOARD_DIR/src/esp32s3-eye.h"
+
+# esp32s3_board_audio.c (ES8311 codec + I2S/I2C buses) has no upstream
+# counterpart at all; without it there is no microphone and no speaker.
+if [ ! -f "$BOARD_DIR/src/esp32s3_board_audio.c" ]; then
+  cp "$PATCHES/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_board_audio.c" \
+     "$BOARD_DIR/src/esp32s3_board_audio.c"
+  echo "  added:   ${BOARD_DIR#$BUILD/}/src/esp32s3_board_audio.c"
+fi
+
 inject "$PATCHES/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_board_lcd.c" \
        "$BOARD_DIR/src/esp32s3_board_lcd.c"
+inject "$PATCHES/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_bringup.c" \
+       "$BOARD_DIR/src/esp32s3_bringup.c"
 
 if [ -f "$BUILD/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c" ]; then
   inject "$PATCHES/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c" \
@@ -146,6 +164,42 @@ grep -q "V626_XTAL32K_HANDOFF    1" "$BOARD_DIR/src/esp32s3_board_lcd.c" \
   && echo "  OK  backlight RTC handoff enabled" || echo "  ??  handoff NOT enabled"
 grep -q "g_i2s_rx_mono" "$BUILD/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c" 2>/dev/null \
   && echo "  OK  i2s RX mono fix present" || echo "  ??  i2s RX fix NOT found"
+grep -q "V681] screen_launcher started" "$BOARD_DIR/src/esp32s3_bringup.c" \
+  && echo "  OK  deferred screen launcher re-enabled" || echo "  ??  screen launcher NOT re-enabled"
+grep -q "no screen worker started" "$BOARD_DIR/src/esp32s3_bringup.c" \
+  && echo "  !!  V630 no-op stub STILL PRESENT" || echo "  OK  V630 stub gone"
+
+# Pin map is the single most silent failure mode here: the upstream header
+# targets Espressif's own ESP32-S3-EYE, so a build that keeps it drives GPIOs
+# that are not wired to anything on the AI-VOX3 and the panel stays black
+# even though every fix above compiled.  Assert it explicitly.
+echo "--- pin map (must be AI-VOX3, not upstream ESP32-S3-EYE) ---"
+for pair in "DISPLAY_DC:14" "DISPLAY_BCKL:16"; do
+  k="${pair%%:*}"; want="${pair##*:}"
+  got=$(grep -oE "define +ESP32S3_EYE_${k} +[0-9]+" "$BOARD_DIR/src/esp32s3-eye.h" \
+        | grep -oE "[0-9]+$" || echo "?")
+  [ "$got" = "$want" ] && echo "  OK  $k = $got" || echo "  !!  $k = $got (want $want)"
+done
+for pair in "SPI2_CSPIN:15" "SPI2_CLKPIN:17" "SPI2_MOSIPIN:21" "I2S0_BCLKPIN:10" \
+            "I2S0_WSPIN:8" "I2S0_DINPIN:9" "I2S0_DOUTPIN:7" "I2C0_SCLPIN:12" "I2C0_SDAPIN:13"; do
+  k="${pair%%:*}"; want="${pair##*:}"
+  got=$(grep -E "^CONFIG_${k}=" "$DEFCONF" | tail -1 | cut -d= -f2 || echo "?")
+  [ "$got" = "$want" ] && echo "  OK  CONFIG_$k = $got" || echo "  !!  CONFIG_$k = $got (want $want)"
+done
+
+# ------------------------------------------------------------ [6b] esp-idf
+# packages_ai_agent's own README requires an ESP-IDF environment for the
+# esp32s3-eye target, and fix_esp32s3.sh must run CONCURRENTLY with the first
+# build after a distclean (it waits for esp-hal-3rdparty to be cloned, then
+# patches mbedtls header priority / CCM cipher / spinlock init).  Skipping
+# either one produces link or struct-layout errors deep in the build.
+echo "== [6b/7] esp-idf toolchain + fix_esp32s3.sh =="
+if [ ! -d /opt/esp-idf ]; then
+  git clone --depth 1 -b v5.1.2 --recursive https://github.com/espressif/esp-idf.git /opt/esp-idf
+fi
+. /opt/esp-idf/install.sh esp32s3
+echo "IDF_PATH=${IDF_PATH:-unset}"
+export CCACHE_DISABLE=1
 
 # ---------------------------------------------------------------- [7] build
 echo "== [7/7] build =="
@@ -168,6 +222,19 @@ if [ -d "$BUILD/$CFG" ]; then
     echo "merging ai_agent defconfig into $CFG/defconfig"
     cp "$DEFCONF" "$BUILD/$CFG/defconfig"
   fi
+
+  # fix_esp32s3.sh races the build on purpose: it blocks until the build has
+  # cloned esp-hal-3rdparty, then patches it.  See packages_ai_agent README.
+  FIXSH="$AI_DIR/fix_esp32s3.sh"
+  if [ -f "$FIXSH" ]; then
+    echo "starting fix_esp32s3.sh in background"
+    ( bash "$FIXSH" || echo "!! fix_esp32s3.sh exited non-zero" ) \
+        >> "$WS/fix_esp32s3.log" 2>&1 &
+    FIX_PID=$!
+  else
+    echo "NOTE: fix_esp32s3.sh not found at $FIXSH (build may hit mbedtls/spinlock errors)"
+  fi
+
   if ! "$BUILD_SH" "$CFG" --cmake -j"$(nproc)"; then
     echo "!! --cmake failed, retrying classic make"
     "$BUILD_SH" "$CFG" -j"$(nproc)"
@@ -176,6 +243,12 @@ else
   echo "FATAL: no usable config dir ($CFG)"
   ls -1 "$BOARD_DIR/configs" 2>/dev/null
   exit 1
+fi
+
+if [ -n "${FIX_PID:-}" ]; then
+  echo "waiting for fix_esp32s3.sh (pid=$FIX_PID)"
+  wait "$FIX_PID" || true
+  echo "--- fix_esp32s3.log ---"; cat "$WS/fix_esp32s3.log" 2>/dev/null | tail -20
 fi
 
 # ------------------------------------------------------------- collect
@@ -198,8 +271,13 @@ cp -f "$LOG" "$WS/firmware/build_vox3.log" 2>/dev/null || true
     && echo "backlight_rtc_handoff: yes" || echo "backlight_rtc_handoff: NO"
   grep -q "g_i2s_rx_mono" "$BUILD/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c" 2>/dev/null \
     && echo "i2s_rx_mono: yes" || echo "i2s_rx_mono: NO"
+  grep -q "V681] screen_launcher started" "$BOARD_DIR/src/esp32s3_bringup.c" \
+    && echo "screen_launcher: yes" || echo "screen_launcher: NO"
   [ -n "$AI_DIR" ] && { grep -q "V681_BTN_STABLE_POLLS" "$AI_DIR/src/voice/voice_channel.c" \
     && echo "button_debounce: yes" || echo "button_debounce: NO"; }
+  echo "--- pin map ---"
+  grep -E "define +ESP32S3_EYE_DISPLAY_(DC|BCKL)" "$BOARD_DIR/src/esp32s3-eye.h" || true
+  grep -E "^CONFIG_ESP32S3_(SPI2|I2S0|I2C0).*PIN" "$DEFCONF" || true
   echo "--- sizes ---"
   ls -la "$WS/firmware" 2>/dev/null || true
 } > "$WS/firmware/BUILD_INFO.txt" 2>&1
