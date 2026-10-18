@@ -15,6 +15,38 @@ jobs:
       SYNC_DEPTH: '1'
 
     steps:
+      # Prove the run really started, and leave a trace on the vox3-log branch
+      # immediately.  A previous push produced neither vox3-fw nor vox3-log,
+      # which is indistinguishable from "the workflow never ran"; this step
+      # makes the two cases tellable apart.
+      - name: Announce start
+        run: |
+          set -x
+          git config --global user.email "vox3-ci@users.noreply.github.com"
+          git config --global user.name  "vox3-ci"
+          echo "commit:   $(git rev-parse HEAD)"    || true
+          echo "branch:   ${GITHUB_REF:-?}"         || true
+          echo "started:  $(date -u '+%Y-%m-%dT%H:%M:%SZ')" || true
+          echo "runner:   $(uname -a)"              || true
+          mkdir -p .announce
+          {
+            echo "commit:  $(git rev-parse HEAD)"
+            echo "branch:  ${GITHUB_REF:-?}"
+            echo "started: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "files:"
+            ls -l build_vox3.sh patches/nuttx/drivers/audio/es8311.c \
+                   patches/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3-eye.h \
+                   defconfigs/ai_vox3_defconfig 2>&1
+          } > .announce/announce.txt
+          cd .announce
+          git init --quiet .
+          git remote add origin \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git checkout --quiet -B vox3-log
+          git add -A
+          git commit -q -m "vox3 run started: $(git rev-parse --short HEAD 2>/dev/null || echo ?) @ $(date -u '+%H:%M:%SZ')" || true
+          git push --force origin vox3-log || echo "WARN: announce push failed"
+
       - name: Checkout (patches + defconfig + build script)
         uses: actions/checkout@v4
 
@@ -42,3 +74,26 @@ jobs:
           name: vox3-log
           path: build_vox3.log
           if-no-files-found: ignore
+
+      # Last-resort evidence: if the build died before its own ERR trap could
+      # publish (killed step, cancelled job, runner loss), the announce commit
+      # above plus this marker still show the run reached the build step.
+      - name: Publish failure marker
+        if: failure()
+        run: |
+          set -x
+          mkdir -p .failed
+          {
+            echo "FAILED at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "commit: $(git rev-parse HEAD 2>/dev/null || echo ?)"
+            echo "--- tail of build_vox3.log ---"
+            tail -60 build_vox3.log 2>/dev/null || echo "(no build_vox3.log)"
+          } > .failed/failure.txt
+          cd .failed
+          git init --quiet .
+          git remote add origin \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git checkout --quiet -B vox3-log
+          git add -A
+          git commit -q -m "vox3 build FAILED: $(date -u '+%Y-%m-%dT%H:%M:%SZ')" || true
+          git push --force origin vox3-log || echo "WARN: failure marker push failed"

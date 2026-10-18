@@ -137,6 +137,20 @@ inject "$PATCHES/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_board_lcd.c
 inject "$PATCHES/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_bringup.c" \
        "$BOARD_DIR/src/esp32s3_bringup.c"
 
+# es8311.c: enable the ADC in es8311_initialize() instead of in
+# es8311_configure(AUDIO_TYPE_INPUT).  The board registers the codec as a raw
+# lower-half (board_audio.c calls audio_register("pcm0c", cap), never
+# es8311_configure), so the configure() arm holding the [V661] fix is dead code
+# here and the capture path stayed down -> "peak = 0" on every chunk.
+if [ -f "$BUILD/nuttx/drivers/audio/es8311.c" ]; then
+  inject "$PATCHES/nuttx/drivers/audio/es8311.c" \
+         "$BUILD/nuttx/drivers/audio/es8311.c"
+else
+  echo "  (es8311.c not at expected path -- locating)"
+  ES=$(find "$BUILD/nuttx" -name "es8311.c" 2>/dev/null | head -1)
+  [ -n "$ES" ] && inject "$PATCHES/nuttx/drivers/audio/es8311.c" "$ES"
+fi
+
 if [ -f "$BUILD/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c" ]; then
   inject "$PATCHES/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c" \
          "$BUILD/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c"
@@ -164,6 +178,8 @@ grep -q "V626_XTAL32K_HANDOFF    1" "$BOARD_DIR/src/esp32s3_board_lcd.c" \
   && echo "  OK  backlight RTC handoff enabled" || echo "  ??  handoff NOT enabled"
 grep -q "g_i2s_rx_mono" "$BUILD/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c" 2>/dev/null \
   && echo "  OK  i2s RX mono fix present" || echo "  ??  i2s RX fix NOT found"
+grep -q "V681] capture path enabled at init" "$BUILD/nuttx/drivers/audio/es8311.c" 2>/dev/null \
+  && echo "  OK  ES8311 ADC enabled at init" || echo "  ??  es8311 ADC fix NOT found"
 grep -q "V681] screen_launcher started" "$BOARD_DIR/src/esp32s3_bringup.c" \
   && echo "  OK  deferred screen launcher re-enabled" || echo "  ??  screen launcher NOT re-enabled"
 grep -q "no screen worker started" "$BOARD_DIR/src/esp32s3_bringup.c" \
@@ -271,6 +287,8 @@ cp -f "$LOG" "$WS/firmware/build_vox3.log" 2>/dev/null || true
     && echo "backlight_rtc_handoff: yes" || echo "backlight_rtc_handoff: NO"
   grep -q "g_i2s_rx_mono" "$BUILD/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c" 2>/dev/null \
     && echo "i2s_rx_mono: yes" || echo "i2s_rx_mono: NO"
+  grep -q "V681] capture path enabled at init" "$BUILD/nuttx/drivers/audio/es8311.c" 2>/dev/null \
+    && echo "es8311_adc_at_init: yes" || echo "es8311_adc_at_init: NO"
   grep -q "V681] screen_launcher started" "$BOARD_DIR/src/esp32s3_bringup.c" \
     && echo "screen_launcher: yes" || echo "screen_launcher: NO"
   [ -n "$AI_DIR" ] && { grep -q "V681_BTN_STABLE_POLLS" "$AI_DIR/src/voice/voice_channel.c" \
