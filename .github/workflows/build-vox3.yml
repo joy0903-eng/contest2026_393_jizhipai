@@ -1,0 +1,53 @@
+name: Build AI-VOX3 v0.1 (esp32s3-eye) with v681 fixes
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_branch:
+        description: 'openvela manifests branch'
+        required: false
+        default: 'dev-ai-contest-2026'
+      sync_depth:
+        description: 'repo sync depth (0 = full, 1 = shallow)'
+        required: false
+        default: '1'
+  push:
+    branches: [ main, master, vox3-build ]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    env:
+      MANIFEST_BRANCH: ${{ github.event.inputs.manifest_branch || 'dev-ai-contest-2026' }}
+      SYNC_DEPTH: ${{ github.event.inputs.sync_depth || '1' }}
+
+    steps:
+      - name: Checkout (patches + defconfig + build script)
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL || true
+          sudo apt-get clean || true
+          df -h || true
+
+      - name: Build AI-VOX3 v0.1 firmware
+        run: bash build_vox3.sh
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vox3-v681-firmware
+          path: firmware/
+          if-no-files-found: error
+
+      - name: Publish build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vox3-build-log
+          path: |
+            build_vox3.log
+          if-no-files-found: ignore
