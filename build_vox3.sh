@@ -305,22 +305,27 @@ echo "--- firmware/ ---"; ls -la "$WS/firmware" 2>/dev/null || echo "(empty)"
 # ------------------------------------------------------------- publish
 # The artifact download API is not reachable from the build side's consumer,
 # so publish the tree to a branch instead: a plain `git fetch` is enough to
-# retrieve it.  A fresh clone per push keeps the history flat and avoids any
-# index conflict with the source branch.
+# retrieve it.  A fresh orphan branch per push keeps the history flat and
+# avoids any index conflict with the source branch.
 echo "== publish firmware to branch 'vox3-fw' =="
 PUB="$WS/.publish"
-rm -rf "$PUB"; git clone --quiet --depth 1 --branch vox3-fw "$WS" "$PUB" 2>/dev/null || {
+ORIGIN_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+rm -rf "$PUB"
+# Try to clone an existing vox3-fw branch; otherwise start a brand-new orphan
+# branch.  You cannot `git checkout -B` in an empty repo (no HEAD).
+if git clone --quiet --depth 1 --branch vox3-fw "$ORIGIN_URL" "$PUB" 2>/dev/null; then
+  echo "  cloned existing vox3-fw branch"
+else
   git init --quiet "$PUB"
-  git -C "$PUB" remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-}
+  git -C "$PUB" remote add origin "$ORIGIN_URL"
+  git -C "$PUB" checkout --quiet --orphan vox3-fw
+fi
 cd "$PUB"
 git config user.name "vox3-ci"
 git config user.email "vox3-ci@users.noreply.github.com"
-if ! git remote get-url origin >/dev/null 2>&1; then
-  git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-fi
-git checkout --quiet -B vox3-fw 2>/dev/null || true
+# Remove everything except .git, then copy fresh firmware.
 git rm -rq --cached . 2>/dev/null || true
+find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} + 2>/dev/null || true
 cp -f "$WS"/firmware/* . 2>/dev/null || true
 git add -A
 git commit -q -m "vox3 firmware: $(date -u '+%Y-%m-%dT%H:%M:%SZ') [${GITHUB_REF:-?}]" || true
@@ -340,7 +345,8 @@ vox3_publish_log() {
   git init --quiet .
   git config user.name "vox3-ci"; git config user.email "vox3-ci@users.noreply.github.com"
   git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-  git checkout --quiet -B vox3-log 2>/dev/null || true
+  # Fresh repo: use orphan branch (git checkout -B needs a HEAD).
+  git checkout --quiet --orphan vox3-log
   git add -A
   git commit -q -m "vox3 build log rc=$rc $(date -u '+%Y-%m-%dT%H:%M:%SZ')" || true
   git push --force origin vox3-log || echo "WARN: log publish failed"

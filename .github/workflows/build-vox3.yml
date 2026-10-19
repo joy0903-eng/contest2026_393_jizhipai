@@ -26,20 +26,29 @@ jobs:
       # immediately.  A previous push produced neither vox3-fw nor vox3-log,
       # which is indistinguishable from "the workflow never ran"; this step
       # makes the two cases tellable apart.
+      #
+      # IMPORTANT: this step runs BEFORE actions/checkout, so there is no git
+      # repo here yet.  All `git rev-parse HEAD` calls must tolerate failure.
+      # The fresh `.announce` directory is also a brand-new repository; in Git
+      # you cannot `git checkout -B` on a repo with no commits, so we use an
+      # orphan branch instead.
       - name: Announce start
         run: |
           set -x
           git config --global user.email "vox3-ci@users.noreply.github.com"
           git config --global user.name  "vox3-ci"
-          echo "commit:   $(git rev-parse HEAD)"    || true
-          echo "branch:   ${GITHUB_REF:-?}"         || true
-          echo "started:  $(date -u '+%Y-%m-%dT%H:%M:%SZ')" || true
-          echo "runner:   $(uname -a)"              || true
+          COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "?")
+          BRANCH=${GITHUB_REF:-?}
+          STARTED=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          echo "commit:   $COMMIT"
+          echo "branch:   $BRANCH"
+          echo "started:  $STARTED"
+          echo "runner:   $(uname -a)"
           mkdir -p .announce
           {
-            echo "commit:  $(git rev-parse HEAD)"
-            echo "branch:  ${GITHUB_REF:-?}"
-            echo "started: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "commit:  $COMMIT"
+            echo "branch:  $BRANCH"
+            echo "started: $STARTED"
             echo "files:"
             ls -l build_vox3.sh patches/nuttx/drivers/audio/es8311.c \
                    patches/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3-eye.h \
@@ -49,9 +58,9 @@ jobs:
           git init --quiet .
           git remote add origin \
             "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git checkout --quiet -B vox3-log
+          git checkout --quiet --orphan vox3-log
           git add -A
-          git commit -q -m "vox3 run started: $(git rev-parse --short HEAD 2>/dev/null || echo ?) @ $(date -u '+%H:%M:%SZ')" || true
+          git commit -q -m "vox3 run started: ${COMMIT:0:8} @ $(date -u '+%H:%M:%SZ')" || true
           git push --force origin vox3-log || echo "WARN: announce push failed"
 
       - name: Checkout (patches + defconfig + build script)
@@ -100,7 +109,7 @@ jobs:
           git init --quiet .
           git remote add origin \
             "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git checkout --quiet -B vox3-log
+          git checkout --quiet --orphan vox3-log
           git add -A
           git commit -q -m "vox3 build FAILED: $(date -u '+%Y-%m-%dT%H:%M:%SZ')" || true
           git push --force origin vox3-log || echo "WARN: failure marker push failed"
