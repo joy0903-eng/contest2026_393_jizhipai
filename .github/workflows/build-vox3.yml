@@ -40,6 +40,8 @@ jobs:
       # you cannot `git checkout -B` on a repo with no commits, so we use an
       # orphan branch instead.
       - name: Announce start
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -x
           git config --global user.email "vox3-ci@users.noreply.github.com"
@@ -92,6 +94,10 @@ jobs:
           df -h || true
 
       - name: Build AI-VOX3 v0.1 firmware
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
         run: bash build_vox3.sh
 
       - name: Upload firmware
@@ -114,6 +120,8 @@ jobs:
       # above plus this marker still show the run reached the build step.
       - name: Publish failure marker
         if: failure()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -x
           # The announce step sets this, but announce itself is a candidate

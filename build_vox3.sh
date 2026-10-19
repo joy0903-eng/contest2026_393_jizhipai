@@ -57,10 +57,27 @@ repo --version
 # ------------------------------------------------------------ [3] toolchain
 echo "== [3/7] xtensa-esp32s3-elf-12.2.0 toolchain =="
 TOOLCHAIN="xtensa-esp32s3-elf-12.2.0_20230208-x86_64-linux-gnu.tar.gz"
-wget -q -c "https://github.com/espressif/crosstool-NG/releases/download/esp-12.2.0_20230208/${TOOLCHAIN}" \
-     -O "/tmp/${TOOLCHAIN}" \
-  || wget -q -c "https://dl.espressif.com/dl/${TOOLCHAIN}" -O "/tmp/${TOOLCHAIN}"
-sudo tar -xf "/tmp/${TOOLCHAIN}" -C /opt
+TC="/tmp/${TOOLCHAIN}"
+TC_OK=0
+for TC_URL in \
+  "https://github.com/espressif/crosstool-NG/releases/download/esp-12.2.0_20230208/${TOOLCHAIN}" \
+  "https://dl.espressif.com/dl/${TOOLCHAIN}" ; do
+  echo "  [tc] trying: $TC_URL"
+  rm -f "$TC"
+  if wget --timeout=60 --tries=2 -O "$TC" "$TC_URL" 2>&1 | tail -4; then
+    TC_SZ=$(stat -c%s "$TC" 2>/dev/null || echo 0)
+    echo "  [tc] got $TC_SZ bytes"
+    if [ "$TC_SZ" -gt 50000000 ]; then TC_OK=1; break; fi
+    echo "  [tc] file too small/corrupt, trying next mirror"
+  else
+    echo "  [tc] download failed, trying next mirror"
+  fi
+done
+if [ "$TC_OK" != 1 ]; then
+  echo "FATAL: toolchain download failed from all mirrors"
+  exit 3
+fi
+sudo tar -xf "$TC" -C /opt
 export PATH="/opt/xtensa-esp32s3-elf/bin:$PATH"
 echo 'export PATH=/opt/xtensa-esp32s3-elf/bin:$PATH' >> ~/.bashrc
 xtensa-esp32s3-elf-gcc --version | head -1
