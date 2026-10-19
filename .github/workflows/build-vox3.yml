@@ -18,6 +18,7 @@ on:
 # for the build script to `git push` firmware/log to branches.
 permissions:
   contents: write
+  actions: write
 
 jobs:
   build:
