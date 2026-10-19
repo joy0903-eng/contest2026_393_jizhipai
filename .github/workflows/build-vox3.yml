@@ -5,6 +5,11 @@ on:
     branches:
       - vox3
   workflow_dispatch:
+  # Fallback: if push events from this fork are not auto-firing (GitHub's
+  # forked-repo workflow policy can suppress push-triggered runs), the build
+  # still kicks off on its own every 15 minutes.  Harmless for a non-fork repo.
+  schedule:
+    - cron: '*/15 * * * *'
 
 # Without this the GITHUB_TOKEN cannot push the vox3-log / vox3-fw branches,
 # and every publish step silently no-ops (|| echo "WARN") — which is exactly
