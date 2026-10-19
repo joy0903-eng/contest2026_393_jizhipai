@@ -1196,6 +1196,151 @@ static int i2s_buf_initialize(struct esp32s3_i2s_s *priv)
  *
  ****************************************************************************/
 
+/* [V682] *** Which engine drives BCLK/WS on the pads? ***
+ *
+ * v681 field data during a PTT capture: MCLK(11) toggling, BCLK(10) = 0 over
+ * 2000 samples, WS(8) = 2000 (stuck high), txstart = 0, rxconf = 0x00089604.
+ *
+ * rxconf decoded (esp32s3 i2s register map): bit2 rx_start = 1,
+ * bit3 rx_slave_mod = 0, bit19 rx_tdm_en = 1 -> the receiver is running AND
+ * is the I2S master (g_v390_rxmaster = 1 is the compile-time default, so
+ * i2s_configure() clears I2S_RX_SLAVE_MOD at line 3270).
+ *
+ * A running I2S master always produces BCK/WS, and the RX side is fully
+ * configured: I2S_RX_CLK_ACTIVE is set (line 2935), RX_CLKM_DIV_* is
+ * programmed (line 3788) and I2S_RX_BCK_DIV_NUM is written next to the TX one
+ * (line 3833).  The clock exists - it just never reaches a pad, because the
+ * pad owner is chosen by
+ *
+ *     if (i2s_rx_active(priv) && !i2s_tx_active(priv))     // line 3001
+ *
+ * and i2s_tx_active() returns true unconditionally (g_v380_txmaster = 1 at
+ * line 2830), so the else branch always wins and binds GPIO10/GPIO8 to
+ * I2S0O_BCK_OUT_IDX / I2S0O_WS_OUT_IDX - the *transmitter's* generators -
+ * while the receiver is the one holding the clock.  The transmitter in turn
+ * only moves while I2S_TX_START is set, and a capture-only session never
+ * sets it (i2s_txsamplerate() stops and resets the transmitter after the
+ * [V382] clock keeper ran, and i2s_tx_channel_start() never writes TX_START).
+ *
+ * Real hardware, v682a experiment (2-byte .rodata flip of the two outsig
+ * fields 22->26 / 24->27, i.e. the same change this helper makes at run time):
+ *
+ *   before: BCLK(10)=0    WS(8)=2000  txstart=0  peak=6
+ *   after : BCLK(10)=1000 WS(8)=1858  txstart=0  peak=32768, "speech detected"
+ *
+ * so the diagnosis is confirmed on the device, and flipping the pad owner
+ * alone does not disturb playback (RX keeps generating its clock while TX
+ * plays - both dividers come from the same source, so the pads carry the same
+ * frequency either way).
+ *
+ * The pads are a single shared resource, so the fix pins them at every
+ * direction switch, in the DMA start functions - the order-independent place:
+ *
+ *   i2s_rxdma_start(): pads <- I2S0I_*_OUT_IDX (RX generator), before RX_START
+ *   i2s_txdma_start(): pads <- I2S0O_*_OUT_IDX (TX generator), before TX_START
+ *
+ * Playback keeps exactly the wiring it uses today (zero regression), capture
+ * gets the generator that is actually running.
+ *
+ * NOTE on the data pins: din_pin = 9 and dout_pin = 7 are correct and are
+ * deliberately untouched.  board.h names them from the codec's point of view
+ * (codec DOUT/ASDOUT = GPIO7 = ESP32 output to the codec DAC; codec DIN/DSDIN
+ * = GPIO9 = ESP32 input from the codec ADC), which reads backwards from the
+ * ESP32 side; playback audio is the proof that dout_pin = 7 is right.
+ */
+
+static int g_v682_pad_owner = -1;   /* 1 = RX generator, 0 = TX generator */
+
+static void i2s_route_bclk_ws(struct esp32s3_i2s_s *priv, bool rx_owner)
+{
+  uint32_t port = priv->config->port;
+  uint32_t bclk_outsig;
+  uint32_t ws_outsig;
+
+  if (priv->config->bclk_pin == I2S_GPIO_UNUSED ||
+      priv->config->ws_pin == I2S_GPIO_UNUSED)
+    {
+      return;
+    }
+
+  if (rx_owner)
+    {
+      bclk_outsig = priv->config->bclk_in_outsig;   /* I2S0I_BCK_OUT_IDX */
+      ws_outsig   = priv->config->ws_in_outsig;     /* I2S0I_WS_OUT_IDX  */
+
+      /* The RX divider only advances while the module gate and the RX clock
+       * domain are enabled.  i2s_configure() opens them, but its RX half is
+       * guarded by "din_pin != I2S_GPIO_UNUSED"; both writes are idempotent.
+       */
+
+      modifyreg32(I2S_TX_CLKM_CONF_REG(port), 0, I2S_CLK_EN);
+      modifyreg32(I2S_RX_CLKM_CONF_REG(port), 0, I2S_RX_CLK_ACTIVE);
+    }
+  else
+    {
+      bclk_outsig = priv->config->bclk_out_outsig;  /* I2S0O_BCK_OUT_IDX */
+      ws_outsig   = priv->config->ws_out_outsig;    /* I2S0O_WS_OUT_IDX  */
+
+      modifyreg32(I2S_TX_CLKM_CONF_REG(port), 0,
+                  I2S_CLK_EN | I2S_TX_CLK_ACTIVE);
+    }
+
+  esp32s3_gpiowrite(priv->config->ws_pin, 1);
+  esp32s3_configgpio(priv->config->ws_pin, OUTPUT_FUNCTION_2);
+  esp32s3_gpio_matrix_out(priv->config->ws_pin, ws_outsig, 0, 0);
+
+  esp32s3_gpiowrite(priv->config->bclk_pin, 1);
+  esp32s3_configgpio(priv->config->bclk_pin, OUTPUT_FUNCTION_2);
+  esp32s3_gpio_matrix_out(priv->config->bclk_pin, bclk_outsig, 0, 0);
+
+  g_v682_pad_owner = rx_owner ? 1 : 0;
+}
+
+/* [V682] *** RX TDM: one slot, two-slot frame. ***
+ *
+ * Measured v682a, with the bit clock finally running, the captured chunks
+ * alternate: chunk#1 peak = 32768, chunk#2 peak = 0, chunk#3 peak = 32768.
+ * The receiver is handing back two samples per frame (L then R, one of them
+ * empty) because both slot enables are set.  Mono capture wants:
+ *
+ *     TOT_CHAN_NUM = 1      (2 slots - 1)
+ *     CHAN0_EN     = 1, CHAN1_EN = 0
+ *
+ * which is bit-for-bit what ESP-IDF does in i2s_ll_rx_select_std_slot() for
+ * I2S_STD_SLOT_LEFT (and what the v680 binary patch did with an immediate).
+ * i2s_configure() writes both enables, so the same values are re-asserted on
+ * every DMA arm, before the rx_update that latches them reaches the RX clock
+ * domain.
+ *
+ * Risk note: this board captures mono (BOARD_AUDIO_CHANNELS = 1).  A board
+ * that needs stereo capture must not call this.
+ */
+
+static void i2s_rx_tdm_mono(struct esp32s3_i2s_s *priv)
+{
+  uint32_t port = priv->config->port;
+
+  modifyreg32(I2S_RX_TDM_CTRL_REG(port), I2S_RX_TDM_TOT_CHAN_NUM_M,
+              FIELD_TO_VALUE(I2S_RX_TDM_TOT_CHAN_NUM, 1));
+  modifyreg32(I2S_RX_TDM_CTRL_REG(port),
+              I2S_RX_TDM_PDM_CHAN0_EN_M | I2S_RX_TDM_PDM_CHAN1_EN_M,
+              I2S_RX_TDM_PDM_CHAN0_EN);
+}
+
+#ifdef I2S_HAVE_RX
+/* [V682] Capture health counters.
+ *
+ * i2s_rxdma_start() may run on the interrupt stack (i2s_rx_schedule() calls it
+ * directly), so these carry no I/O - i2s_receive() prints them from task
+ * context instead.
+ */
+
+static int g_v682_pad_logs;         /* console report rate gate        */
+static int g_v682_start_lost;       /* RX_START did not stick          */
+static int g_v682_act_stale;        /* rx.act non-empty, RX_START = 0  */
+static int g_v682_rxstart;          /* RX_START read back after arming */
+#endif /* I2S_HAVE_RX */
+
 #ifdef I2S_HAVE_TX
 static int IRAM_ATTR i2s_txdma_start(struct esp32s3_i2s_s *priv)
 {
@@ -1334,6 +1479,25 @@ static int IRAM_ATTR i2s_txdma_start(struct esp32s3_i2s_s *priv)
   /* Start transmission if no data is already being transmitted */
 
   bfcontainer = (struct esp32s3_buffer_s *)sq_remfirst(&priv->tx.pend);
+
+  /* [V682] The TX twin of the pad pinning in i2s_rxdma_start(): playback owns
+   * BCLK/WS while it streams.  This restores exactly the signal pair the pads
+   * carry today (I2S0O_*_OUT_IDX), so the working playback path is unchanged -
+   * it only stops a preceding capture from leaving the pads on the receiver's
+   * generator, whose RX channel is stopped by then (no clock, silent codec).
+   *
+   * It sits before the [V349] stop / [V264] configure / I2S_TX_START
+   * sequence because TX_START is the last write of that sequence and the
+   * frame sync has to be re-opened with the right pad owner already in place.
+   *
+   * Certainty: 已证实 (v682a: playback, display and Wi-Fi all normal with the
+   * pad owner changed at run time).
+   */
+
+  if (priv->config->role == I2S_ROLE_MASTER)
+    {
+      i2s_route_bclk_ws(priv, false);
+    }
 
   /* [V349] *** Stop the transmitter BEFORE the configure/reset block. ***
    *
@@ -1956,6 +2120,25 @@ static int i2s_rxdma_start(struct esp32s3_i2s_s *priv)
 
   if (!sq_empty(&priv->rx.act))
     {
+      /* [V682] An entry in rx.act means "a transfer is in flight", so this
+       * bail-out is normally correct.  But if the channel is not running at
+       * the same time nothing will ever complete that entry, and every later
+       * arm returns here - which is the second-PTT symptom measured on v682a:
+       * rxconf = 0x00089600 (rx_start = 0), "capture EIO, retry 1/5..5/5",
+       * 0 chunks, only a reboot recovers.
+       *
+       * Count it, and re-assert RX_START so the descriptor that is still
+       * pending gets a chance to complete instead of hanging forever.
+       */
+
+      if (!(getreg32(I2S_RX_CONF_REG(priv->config->port)) & I2S_RX_START))
+        {
+          g_v682_act_stale++;
+
+          modifyreg32(I2S_RX_CONF_REG(priv->config->port), 0, I2S_RX_START);
+          modifyreg32(I2S_RX_CONF_REG(priv->config->port), 0, I2S_RX_UPDATE);
+        }
+
       return OK;
     }
 
@@ -1988,6 +2171,35 @@ static int i2s_rxdma_start(struct esp32s3_i2s_s *priv)
 
   modifyreg32(I2S_RXEOF_NUM_REG(priv->config->port), I2S_RX_EOF_NUM_M,
               FIELD_TO_VALUE(I2S_RX_EOF_NUM, eof_nbytes));
+
+  /* [V682] Both of the things that decide whether this buffer can ever
+   * complete are (re-)asserted here, ahead of the DMA arm and ahead of
+   * I2S_RX_START:
+   *
+   *   1) who drives BCLK/WS on the pads - the receiver is the master
+   *      (rxconf bit3 = 0), so it must own them;
+   *   2) RX TDM in single-channel mode (CHAN0 only, 2-slot frame), which the
+   *      rx_update below hands to the RX clock domain.
+   *
+   * Order matters: once the receiver is started it clocks on whatever was
+   * wired at that instant, and re-routing a pad afterwards does not re-open
+   * the frame sync (the v680 lesson).  Doing it per buffer also makes it
+   * independent of the call order of es8311_setsamplerate() /
+   * es8311_setbitspersample(), which reconfigure both directions in turn and
+   * leave the pads on the TX generator.
+   *
+   * Register writes only - no I/O, no locks - because i2s_rx_schedule() also
+   * enters here on the interrupt stack.  The console report lives in
+   * i2s_receive(), which is always task context.
+   */
+
+  if (priv->config->role == I2S_ROLE_MASTER &&
+      !(getreg32(I2S_RX_CONF_REG(priv->config->port)) & I2S_RX_SLAVE_MOD))
+    {
+      i2s_route_bclk_ws(priv, true);
+    }
+
+  i2s_rx_tdm_mono(priv);
 
   /* [V392] Enqueue BEFORE arming, not after.
    *
@@ -2051,6 +2263,32 @@ static int i2s_rxdma_start(struct esp32s3_i2s_s *priv)
       }
 
     g_v388_post_spins = spins;
+
+    /* [V682] The DMA is armed and RX_START has been raised twice; verify that
+     * the bit actually stuck, and re-assert it once if it did not.  The
+     * v682a field run saw later PTT sessions come up with
+     * rxconf = 0x00089600 (bit2 = 0) and 0 chunks, so "START was written once
+     * and lost" is a real failure mode on this part.  The readback is kept for
+     * the i2s_receive() report.
+     */
+
+    g_v682_rxstart =
+      (getreg32(I2S_RX_CONF_REG(priv->config->port)) & I2S_RX_START) ? 1 : 0;
+
+    if (!g_v682_rxstart)
+      {
+        modifyreg32(I2S_RX_CONF_REG(priv->config->port), 0, I2S_RX_START);
+        modifyreg32(I2S_RX_CONF_REG(priv->config->port), 0, I2S_RX_UPDATE);
+
+        g_v682_rxstart =
+          (getreg32(I2S_RX_CONF_REG(priv->config->port)) & I2S_RX_START) ?
+          1 : 0;
+
+        if (!g_v682_rxstart)
+          {
+            g_v682_start_lost++;
+          }
+      }
   }
 
   if (g_v388_logs < 4)
@@ -3003,9 +3241,24 @@ static void i2s_configure(struct esp32s3_i2s_s *priv)
                                   priv->config->mclk_out_sig, 0, 0);
         }
 
-      if (i2s_rx_active(priv) && !i2s_tx_active(priv))
+      /* [V682] The receiver owns the clock whenever it is the master
+       * (g_v390_rxmaster is the compile-time default here), so it must own
+       * the pads too.  Without the added term this condition is dead code:
+       * i2s_tx_active() returns true unconditionally (g_v380_txmaster = 1),
+       * so the pads stayed bound to the transmitter's generators, which are
+       * idle during capture - measured v681: BCLK(10) = 0, WS(8) stuck high,
+       * rxconf = 0x00089604 (rx_start = 1, rx_slave_mod = 0).
+       *
+       * Certainty: 已证实 (v682a real-device experiment: BCLK 0 -> 1000,
+       * WS stuck high -> 1858, mic peak 6 -> 32768).
+       */
+
+      if (i2s_rx_active(priv) &&
+          (g_v390_rxmaster || !i2s_tx_active(priv)))
         {
           /* For "rx + master" mode, select RX signal index for ws and bck */
+
+          g_v682_pad_owner = 1;
 
           esp32s3_gpiowrite(priv->config->ws_pin, 1);
           esp32s3_configgpio(priv->config->ws_pin, OUTPUT_FUNCTION_2);
@@ -3022,6 +3275,8 @@ static void i2s_configure(struct esp32s3_i2s_s *priv)
           /* For "tx + rx + master" or "tx + master" mode, select TX signal
            * index for ws and bck.
            */
+
+          g_v682_pad_owner = 0;
 
           esp32s3_gpiowrite(priv->config->ws_pin, 1);
           esp32s3_configgpio(priv->config->ws_pin, OUTPUT_FUNCTION_2);
@@ -3483,7 +3738,8 @@ void esp32s3_i2s_rx_health(void)
     }
 
   syslog(LOG_INFO,
-         "[V660] pins MCLK(11)=%u BCLK(10)=%u WS(8)=%u DIN(9)=%u /2000 | "
+         "[V660] pins MCLK(11)=%u BCLK(10)=%u WS(8)=%u ASDOUT-IN(9)=%u "
+         "/2000 | "
          "rxconf=0x%08x txconf=0x%08x rxstart=%d txstart=%d rxonly=%d "
          "loopback=%d txmaster=%d\n",
          mhi, bhi, whi, dhi,
@@ -5532,6 +5788,62 @@ static int i2s_receive(struct i2s_dev_s *dev, struct ap_buffer_s *apb,
       if (ret != OK)
         {
           goto errout_with_buf;
+        }
+
+      /* [V682] Console report of the state this buffer was armed with.
+       *
+       * Deliberately here and not in i2s_rxdma_start(): that function is also
+       * called from i2s_rx_schedule() on the interrupt stack, and the 2 KB IRQ
+       * stack overflowed on exactly this kind of syslog() in v392.  i2s_receive()
+       * always runs in the caller's task (the es8311 worker).
+       *
+       * Read it as:
+       *   bclk(gpioN)<-sigM : which generator drives the pad
+       *                       (RX = I2S0I_BCK_OUT_IDX, TX = I2S0O_BCK_OUT_IDX)
+       *   rxstart / verify  : RX_START now, and the value read back after the
+       *                       post-arm re-assert
+       *   lost / stale      : >0 means RX_START never stuck, or rx.act was
+       *                       left pending without a running channel (the
+       *                       second-PTT failure mode)
+       *   tdm=0x00010001    : CHAN0 only, two-slot frame (mono)
+       *
+       * Certainty: 已证实 as an observation tool.
+       */
+
+      if (g_v682_pad_logs < 3 || g_v682_start_lost || g_v682_act_stale)
+        {
+          uint32_t v682_rxconf =
+            getreg32(I2S_RX_CONF_REG(priv->config->port));
+          uint32_t v682_txconf =
+            getreg32(I2S_TX_CONF_REG(priv->config->port));
+
+          g_v682_pad_logs++;
+
+          syslog(LOG_INFO,
+                 "[V682] rx armed: role=%s bclk(gpio%d)<-sig%" PRIu32
+                 " ws(gpio%d)<-sig%" PRIu32 " rxstart=%d verify=%d"
+                 " txstart=%d lost=%d stale=%d tdm=0x%08" PRIx32
+                 " rxconf=0x%08" PRIx32 " rxconf1=0x%08" PRIx32
+                 " din(gpio%d) dout(gpio%d)\n",
+                 g_v390_rxmaster ? "RXMASTER" : "RXSLAVE",
+                 (int)priv->config->bclk_pin,
+                 (uint32_t)(g_v682_pad_owner == 1 ?
+                            priv->config->bclk_in_outsig :
+                            priv->config->bclk_out_outsig),
+                 (int)priv->config->ws_pin,
+                 (uint32_t)(g_v682_pad_owner == 1 ?
+                            priv->config->ws_in_outsig :
+                            priv->config->ws_out_outsig),
+                 (v682_rxconf & I2S_RX_START) ? 1 : 0,
+                 g_v682_rxstart,
+                 (v682_txconf & I2S_TX_START) ? 1 : 0,
+                 g_v682_start_lost, g_v682_act_stale,
+                 (uint32_t)getreg32(
+                   I2S_RX_TDM_CTRL_REG(priv->config->port)),
+                 v682_rxconf,
+                 (uint32_t)getreg32(I2S_RX_CONF1_REG(priv->config->port)),
+                 (int)priv->config->din_pin,
+                 (int)priv->config->dout_pin);
         }
 
       i2sinfo("Prepared %d bytes to receive DMA buffers\n", apb->nmaxbytes);
