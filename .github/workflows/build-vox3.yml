@@ -6,6 +6,13 @@ on:
       - vox3
   workflow_dispatch:
 
+# Without this the GITHUB_TOKEN cannot push the vox3-log / vox3-fw branches,
+# and every publish step silently no-ops (|| echo "WARN") — which is exactly
+# why no marker branch appeared after the first pushes.  Read+write is required
+# for the build script to `git push` firmware/log to branches.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-22.04
