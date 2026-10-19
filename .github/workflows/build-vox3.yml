@@ -56,9 +56,12 @@ jobs:
             echo "branch:  $BRANCH"
             echo "started: $STARTED"
             echo "files:"
+            # NOTE: this runs BEFORE actions/checkout, so the workspace is
+            # empty and `ls` returns exit code 2 ("No such file") which would
+            # kill the step under the default `bash -e`.  Guard it.
             ls -l build_vox3.sh patches/nuttx/drivers/audio/es8311.c \
                    patches/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3-eye.h \
-                   defconfigs/ai_vox3_defconfig 2>&1
+                   defconfigs/ai_vox3_defconfig 2>&1 || true
           } > .announce/announce.txt
           cd .announce
           git init --quiet .
@@ -67,7 +70,9 @@ jobs:
           git checkout --quiet --orphan vox3-log
           git add -A
           git commit -q -m "vox3 run started: ${COMMIT:0:8} @ $(date -u '+%H:%M:%SZ')" || true
-          git push --force origin vox3-log || echo "WARN: announce push failed"
+          # --quiet hides nothing important; keep push output VISIBLE so a
+          # rejected GITHUB_TOKEN push can be diagnosed from the run log.
+          git push --force origin vox3-log 2>&1 || echo "WARN: announce push failed"
 
       - name: Checkout (patches + defconfig + build script)
         uses: actions/checkout@v4
@@ -110,6 +115,10 @@ jobs:
         if: failure()
         run: |
           set -x
+          # The announce step sets this, but announce itself is a candidate
+          # for failure -- never depend on a previous step having run.
+          git config --global user.email "vox3-ci@users.noreply.github.com"
+          git config --global user.name  "vox3-ci"
           mkdir -p .failed
           {
             echo "FAILED at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -124,4 +133,4 @@ jobs:
           git checkout --quiet --orphan vox3-log
           git add -A
           git commit -q -m "vox3 build FAILED: $(date -u '+%Y-%m-%dT%H:%M:%SZ')" || true
-          git push --force origin vox3-log || echo "WARN: failure marker push failed"
+          git push --force origin vox3-log 2>&1 || echo "WARN: failure marker push failed"
