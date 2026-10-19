@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - vox3
+      - dev-ai-contest-2026
   workflow_dispatch:
   # Fallback: if push events from this fork are not auto-firing (GitHub's
   # forked-repo workflow policy can suppress push-triggered runs), the build
@@ -70,6 +71,12 @@ jobs:
 
       - name: Checkout (patches + defconfig + build script)
         uses: actions/checkout@v4
+        with:
+          # The build content (patches, defconfig, build script) lives on the
+          # vox3 branch; the workflow itself is also present on the default
+          # branch so it is visible/triggerable in the Actions UI.  Always
+          # build from vox3 regardless of which branch fired the event.
+          ref: vox3
 
       - name: Free disk space
         run: |
