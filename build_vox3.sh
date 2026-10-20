@@ -270,8 +270,40 @@ if [ -d "$BUILD/$CFG" ]; then
   # 因此它必须落在 configs/ai_agent 下（[6/7] 已把文件放到 $BOARD_DIR/configs/ai_agent/defconfig）。
   # 无论该目录原先有没有 defconfig，都无条件用我们的 ai_vox3_defconfig 填充，
   # 避免上游 esp32s3-eye 只有 configs/openvela 骨架、缺 defconfig 时 lunch 直接崩溃。
-  cp "$DEFCONF" "$BUILD/$CFG/defconfig"
-  echo "defconfig <- $DEFCONF ($(wc -l < "$DEFCONF") lines)"
+  # Inject the defconfig into BOTH possible board-config locations.
+  # openvela's build.sh may resolve esp32s3-eye to the vendor path OR the
+  # nuttx-tree path and only inspects one of them, so cover both to guarantee
+  # lunch finds the config.  The previous run grepped
+  # ".../configs/ai_agent/defconfig: No such file" even though we copied it to
+  # only one location -> CMake then fell back to an unset CONFIG_APPS_DIR and
+  # died with "Application directory ../apps is not found".
+  OTHER="nuttx/boards/xtensa/esp32s3/esp32s3-eye/configs/ai_agent"
+  [ "$CFG" = "$OTHER" ] && OTHER="vendor/espressif/boards/esp32s3/esp32s3-eye/configs/ai_agent"
+
+  # Auto-detect the apps dir actually present after repo sync.  CONFIG_APPS_DIR
+  # defaults to "../apps", which only resolves if openvela/apps exists; on this
+  # manifest the apps may instead live at packages/apps.  Point the defconfig at
+  # the real path so CMake's "Application directory ... not found" never fires.
+  APPS_DIR=""
+  for c in "$BUILD/apps" "$BUILD/packages/apps"; do
+    [ -d "$c" ] && { APPS_DIR="$c"; break; }
+  done
+  [ -n "$APPS_DIR" ] || APPS_DIR=$(find "$BUILD" -maxdepth 2 -type d -name apps 2>/dev/null | head -1)
+  REL=""
+  if [ -n "$APPS_DIR" ]; then
+    REL=$(python3 -c "import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))" \
+            "$APPS_DIR" "$BUILD/nuttx" 2>/dev/null) || REL=""
+    echo "apps dir resolved: $APPS_DIR  -> CONFIG_APPS_DIR=\"$REL\""
+  else
+    echo "WARN: no apps dir found under $BUILD; leaving CONFIG_APPS_DIR as-is"
+  fi
+
+  for d in "$CFG" "$OTHER"; do
+    mkdir -p "$BUILD/$d"
+    cp -f "$DEFCONF" "$BUILD/$d/defconfig"
+    [ -n "$REL" ] && sed -i "s|^CONFIG_APPS_DIR=.*|CONFIG_APPS_DIR=\"$REL\"|" "$BUILD/$d/defconfig"
+    echo "defconfig -> $d/defconfig ($(wc -l < "$BUILD/$d/defconfig") lines, APPS_DIR=${REL:-<unchanged>})"
+  done
 
   # fix_esp32s3.sh races the build on purpose: it blocks until the build has
   # cloned esp-hal-3rdparty, then patches it.  See packages_ai_agent README.
