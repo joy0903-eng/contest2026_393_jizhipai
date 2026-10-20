@@ -320,7 +320,14 @@ if [ -d "$BUILD/$CFG" ]; then
   for d in "$CFG" "$OTHER"; do
     mkdir -p "$BUILD/$d"
     cp -f "$DEFCONF" "$BUILD/$d/defconfig"
-    sed -i "s|^CONFIG_APPS_DIR=.*|CONFIG_APPS_DIR=\"$REAL_APPS\"|" "$BUILD/$d/defconfig"
+    # board esp32s3-eye has NO cmake support in this fork (no CMakeLists.txt
+# anywhere: not in vendor/espressif, not in nuttx/boards), so the cmake
+# pass ALWAYS fails and openvela build.sh falls back to classic make.
+# classic make resolves CONFIG_APPS_DIR relative to the NUTTX SOURCE dir
+# (openvela/nuttx/../apps = openvela/apps, which we symlinked to the real
+# apps dir), so a RELATIVE "../apps" is exactly what the make fallback needs
+# (an absolute path gets re-based onto nuttx/tools/.. and breaks).
+    sed -i "s|^CONFIG_APPS_DIR=.*|CONFIG_APPS_DIR=\"../apps\"|" "$BUILD/$d/defconfig"
     echo "defconfig -> $d/defconfig ($(wc -l < "$BUILD/$d/defconfig") lines, APPS_DIR=$REAL_APPS)"
   done
 
