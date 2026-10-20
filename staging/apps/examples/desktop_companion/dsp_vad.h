@@ -43,11 +43,11 @@ extern "C"
  ****************************************************************************/
 
 #define VAD_FRAME_MS        20     /* one analysis hop                      */
-#define VAD_SILENCE_MS      700    /* trailing silence that ends a word     */
+#define VAD_SILENCE_MS      300    /* trailing silence that ends a word (was 700: faster endpoint) */
 #define VAD_MAX_WORD_MS     2800   /* hard utterance length limit           */
 #define VAD_MIN_WORD_MS     280    /* shorter utterances are discarded      */
 #define VAD_PRE_ROLL_MS     200    /* audio kept before the trigger         */
-#define VAD_COOLDOWN_MS     500    /* dead time after a finished word       */
+#define VAD_COOLDOWN_MS     250    /* dead time after a finished word (was 500) */
 
 #define VAD_NOISE_INIT      600.0f /* initial noise-floor RMS               */
 #define VAD_NOISE_ALPHA     0.02f  /* noise tracker step (0.98 / 0.02)      */
