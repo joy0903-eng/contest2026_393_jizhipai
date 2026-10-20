@@ -86,13 +86,20 @@ xtensa-esp32s3-elf-gcc --version | head -1
 echo "== [4/7] repo init + sync openvela ($MANIFEST_BRANCH) =="
 mkdir -p "$BUILD"
 cd "$BUILD"
-repo init -u https://github.com/open-vela/manifests.git \
-  -b "$MANIFEST_BRANCH" -m openvela.xml \
-  --repo-url=https://mirrors.tuna.tsinghua.edu.cn/git/git-repo/ --git-lfs
+# NOTE: --depth belongs to `repo init`, never `repo sync`.  repo >=2.69 rejects
+# `repo sync --depth` ("no such option: --depth"), which killed the previous run.
+# Shallow-clone the whole tree at init time; sync WITHOUT --depth.
 if [ "$SYNC_DEPTH" != "0" ]; then
-  repo sync -c -j"$(nproc)" --depth="$SYNC_DEPTH" --no-tags
+  repo init -u https://github.com/open-vela/manifests.git \
+    -b "$MANIFEST_BRANCH" -m openvela.xml \
+    --repo-url=https://mirrors.tuna.tsinghua.edu.cn/git/git-repo/ \
+    --git-lfs --depth=1
+  repo sync -c -j"$(nproc)" --no-tags
 else
-  repo sync -c -j"$(nproc)"
+  repo init -u https://github.com/open-vela/manifests.git \
+    -b "$MANIFEST_BRANCH" -m openvela.xml \
+    --repo-url=https://mirrors.tuna.tsinghua.edu.cn/git/git-repo/ --git-lfs
+  repo sync -c -j"$(nproc)" --no-tags
 fi
 echo "--- top level ---"; ls -1 "$BUILD" | head -20
 
@@ -370,5 +377,25 @@ vox3_publish_log() {
   exit $rc
 }
 trap vox3_publish_log ERR
+
+# The ERR trap only fires on failure, so a successful build leaves vox3-log
+# untouched and a consumer cannot tell "still building" from "finished OK".
+# Leave an explicit success marker (firmware itself lands on vox3-fw branch).
+echo "== publish success marker to 'vox3-log' =="
+OKDIR="$WS/.publish_ok"
+rm -rf "$OKDIR"; mkdir -p "$OKDIR"
+{
+  echo "BUILD_OK at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "commit: $(git -C "$WS" rev-parse HEAD 2>/dev/null)"
+  echo "firmware: published to vox3-fw branch"
+} > "$OKDIR/build_ok.txt"
+cd "$OKDIR"
+git init --quiet .
+git config user.name "vox3-ci"; git config user.email "vox3-ci@users.noreply.github.com"
+git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+git checkout --quiet --orphan vox3-log
+git add -A
+git commit -q -m "vox3 build OK: $(date -u '+%Y-%m-%dT%H:%M:%SZ')" || true
+git push --force origin vox3-log || echo "WARN: ok marker publish failed"
 
 echo "== DONE =="
