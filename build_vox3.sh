@@ -280,29 +280,48 @@ if [ -d "$BUILD/$CFG" ]; then
   OTHER="nuttx/boards/xtensa/esp32s3/esp32s3-eye/configs/ai_agent"
   [ "$CFG" = "$OTHER" ] && OTHER="vendor/espressif/boards/esp32s3/esp32s3-eye/configs/ai_agent"
 
-  # Auto-detect the apps dir actually present after repo sync.  CONFIG_APPS_DIR
-  # defaults to "../apps", which only resolves if openvela/apps exists; on this
-  # manifest the apps may instead live at packages/apps.  Point the defconfig at
-  # the real path so CMake's "Application directory ... not found" never fires.
-  APPS_DIR=""
-  for c in "$BUILD/apps" "$BUILD/packages/apps"; do
-    [ -d "$c" ] && { APPS_DIR="$c"; break; }
+  # Resolve the apps dir that was actually synced, then make it reachable from
+  # BOTH the nuttx source dir AND the cmake binary dir.  openvela's build.sh
+  # sets CMAKE_BINARY_DIR=cmake_out/<board>_<cfg>, and nuttx's CMakeLists
+  # resolves CONFIG_APPS_DIR="../apps" relative to that binary dir (NOT the
+  # nuttx source dir) -> "Application directory ../apps is not found".
+  # Fix: (a) write an ABSOLUTE CONFIG_APPS_DIR into the defconfig so it survives
+  # any base dir, and (b) symlink openvela/cmake_out/apps -> real apps so the
+  # relative ../apps that openvela/envsetup may also emit resolves correctly.
+  REAL_APPS=""
+  for c in "$BUILD/apps" "$BUILD/packages/apps" "$BUILD/nuttx/apps"; do
+    if [ -d "$c" ] && [ -n "$(ls -A "$c" 2>/dev/null)" ]; then
+      REAL_APPS="$c"; break
+    fi
   done
-  [ -n "$APPS_DIR" ] || APPS_DIR=$(find "$BUILD" -maxdepth 2 -type d -name apps 2>/dev/null | head -1)
-  REL=""
-  if [ -n "$APPS_DIR" ]; then
-    REL=$(python3 -c "import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))" \
-            "$APPS_DIR" "$BUILD/nuttx" 2>/dev/null) || REL=""
-    echo "apps dir resolved: $APPS_DIR  -> CONFIG_APPS_DIR=\"$REL\""
-  else
-    echo "WARN: no apps dir found under $BUILD; leaving CONFIG_APPS_DIR as-is"
+  if [ -z "$REAL_APPS" ]; then
+    for c in $(find "$BUILD" -maxdepth 2 -type d -name apps 2>/dev/null); do
+      if [ -n "$(ls -A "$c" 2>/dev/null)" ]; then REAL_APPS="$c"; break; fi
+    done
   fi
+  if [ -z "$REAL_APPS" ]; then
+    echo "FATAL: no populated apps dir found under $BUILD"
+    exit 1
+  fi
+  echo "REAL_APPS=$REAL_APPS"
+
+  # ensure openvela/apps points at the real apps (in case sync left it empty)
+  if [ "$REAL_APPS" != "$BUILD/apps" ]; then
+    if [ -L "$BUILD/apps" ] || [ ! -e "$BUILD/apps" ]; then
+      rm -rf "$BUILD/apps"
+      ln -sfn "$REAL_APPS" "$BUILD/apps"
+    fi
+  fi
+
+  # symlink so cmake binary-dir-relative ../apps resolves to real apps
+  mkdir -p "$BUILD/cmake_out"
+  ln -sfn "$BUILD/apps" "$BUILD/cmake_out/apps"
 
   for d in "$CFG" "$OTHER"; do
     mkdir -p "$BUILD/$d"
     cp -f "$DEFCONF" "$BUILD/$d/defconfig"
-    [ -n "$REL" ] && sed -i "s|^CONFIG_APPS_DIR=.*|CONFIG_APPS_DIR=\"$REL\"|" "$BUILD/$d/defconfig"
-    echo "defconfig -> $d/defconfig ($(wc -l < "$BUILD/$d/defconfig") lines, APPS_DIR=${REL:-<unchanged>})"
+    sed -i "s|^CONFIG_APPS_DIR=.*|CONFIG_APPS_DIR=\"$REAL_APPS\"|" "$BUILD/$d/defconfig"
+    echo "defconfig -> $d/defconfig ($(wc -l < "$BUILD/$d/defconfig") lines, APPS_DIR=$REAL_APPS)"
   done
 
   # fix_esp32s3.sh races the build on purpose: it blocks until the build has
