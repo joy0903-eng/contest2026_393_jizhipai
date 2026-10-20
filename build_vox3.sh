@@ -237,7 +237,16 @@ echo "== [6b/7] esp-idf toolchain + fix_esp32s3.sh =="
 if [ ! -d /opt/esp-idf ]; then
   git clone --depth 1 -b v5.1.2 --recursive https://github.com/espressif/esp-idf.git /opt/esp-idf
 fi
-. /opt/esp-idf/install.sh esp32s3
+# esp-idf's install.sh derives IDF_PATH from $0 (`basedir=$(dirname "$0")`).
+# This script has already `cd`'d into $BUILD (the openvela dir) and invokes
+# install.sh via a relative path, so $0 resolves to the openvela dir and
+# install.sh looks for openvela/tools/detect_python.sh (which does not exist)
+# -> "/opt/esp-idf/install.sh: line 11: .../openvela/tools/detect_python.sh:
+# No such file or directory".  Run install.sh from its OWN directory so $0 is
+# correct, then source the generated environment.
+export IDF_PATH=/opt/esp-idf
+( cd "$IDF_PATH" && ./install.sh esp32s3 )
+. "$IDF_PATH/export.sh"
 echo "IDF_PATH=${IDF_PATH:-unset}"
 export CCACHE_DISABLE=1
 
