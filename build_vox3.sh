@@ -345,7 +345,12 @@ if [ -d "$BUILD/$CFG" ]; then
 
   if ! "$BUILD_SH" "$CFG" --cmake -j"$(nproc)"; then
     echo "!! --cmake failed, retrying classic make"
-    "$BUILD_SH" "$CFG" -j"$(nproc)"
+    if ! "$BUILD_SH" "$CFG" -j"$(nproc)" > "$WS/make.log" 2>&1; then
+      echo "!! MAKE FAILED -- tail of make.log (this is the real build error):"
+      tail -50 "$WS/make.log"
+      echo "!! (full make.log also published to vox3-log branch)"
+      exit 1
+    fi
   fi
 else
   echo "FATAL: no usable config dir ($CFG)"
