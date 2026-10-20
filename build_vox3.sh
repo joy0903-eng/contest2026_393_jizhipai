@@ -257,20 +257,21 @@ BUILD_SH=$(find "$BUILD" -maxdepth 2 -name build.sh | head -1)
 [ -n "$BUILD_SH" ] || { echo "FATAL: build.sh not found"; exit 1; }
 echo "using $BUILD_SH"
 
-CFG="vendor/espressif/boards/esp32s3/esp32s3-eye/configs/openvela"
+CFG="vendor/espressif/boards/esp32s3/esp32s3-eye/configs/ai_agent"
 if [ ! -d "$BUILD/$CFG" ]; then
-  echo "NOTE: $CFG missing, falling back to configs/ai_agent"
+  echo "NOTE: vendor configs/ai_agent missing, using nuttx-tree configs/ai_agent"
   CFG="nuttx/boards/xtensa/esp32s3/esp32s3-eye/configs/ai_agent"
 fi
 echo "CFG=$CFG"
 
 # esp32s3-eye 官方只提供 configs/openvela（见 provision_openvela.sh 注释）
 if [ -d "$BUILD/$CFG" ]; then
-  # 用 ai_agent defconfig 覆盖 openvela 配置里的选项
-  if [ -f "$BUILD/$CFG/defconfig" ]; then
-    echo "merging ai_agent defconfig into $CFG/defconfig"
-    cp "$DEFCONF" "$BUILD/$CFG/defconfig"
-  fi
+  # ai_vox3_defconfig 的 CONFIG_BASE_DEFCONFIG 是 esp32s3-eye:ai_agent-dirty，
+  # 因此它必须落在 configs/ai_agent 下（[6/7] 已把文件放到 $BOARD_DIR/configs/ai_agent/defconfig）。
+  # 无论该目录原先有没有 defconfig，都无条件用我们的 ai_vox3_defconfig 填充，
+  # 避免上游 esp32s3-eye 只有 configs/openvela 骨架、缺 defconfig 时 lunch 直接崩溃。
+  cp "$DEFCONF" "$BUILD/$CFG/defconfig"
+  echo "defconfig <- $DEFCONF ($(wc -l < "$DEFCONF") lines)"
 
   # fix_esp32s3.sh races the build on purpose: it blocks until the build has
   # cloned esp-hal-3rdparty, then patches it.  See packages_ai_agent README.
