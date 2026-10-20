@@ -133,6 +133,11 @@ CONFIG_MM_REGIONS=2
 # bootloader whose chip-revision gate rejects this ESP32-S3 (revision v0.2).
 # Symptom: completely dark LCD with zero bytes on the USB-Serial/JTAG console.
 
+# Explicitly pin SIMPLE_BOOT so the ROM direct-boot path is unambiguous and
+# the build-time audit in build_vox3.sh passes without relying on Kconfig's
+# default-y resolution (which can flip off if any app-format symbol sneaks in).
+CONFIG_ESPRESSIF_SIMPLE_BOOT=y
+
 # SMP: ESP32-S3 is dual-core; matches the official esp32s3-eye defconfig.
 # (Attribution note: the esp-hal-3rdparty clk_ctrl_os.c "invalid initializer"
 # error was NOT caused by missing SMP -- OpenVela's spinlock_t is a struct in
@@ -255,6 +260,14 @@ CONFIG_ESP32S3_I2C_PERIPH_MASTER_MODE=y
 # include) and #errors without AUDIO/I2S/I2C/SCHED_WORKQUEUE.
 CONFIG_AUDIO_ES8311=y
 CONFIG_SCHED_WORKQUEUE=y
+# Volume: fix "听不清" (too quiet).  es8311_probe() calls
+# es8311_setvolume(priv, ES_MODULE_DAC, CONFIG_ES8311_OUTPUT_INITVOLUME) and
+# the ADC equivalent; the driver maps 0..1000 onto the codec's 0..200 dB
+# curve (29*logf).  1000 = max.  Without this the DAC init volume is left at
+# the Kconfig default (often 0 -> mute).  Range confirmed in
+# patches/nuttx/drivers/audio/es8311.c:es8311_setvolume (0..1000).
+CONFIG_ES8311_OUTPUT_INITVOLUME=1000
+CONFIG_ES8311_INPUT_INITVOLUME=1000
 
 # --- Wi-Fi + network stack ---------------------------------------------------
 CONFIG_ESP32S3_WIFI=y

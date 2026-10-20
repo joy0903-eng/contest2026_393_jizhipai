@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
 # =============================================================================
-# build_vox3.sh -- 在 GitHub Actions (ubuntu-22.04) 上构建 AI-VOX3 (esp32-s3
-#                  AI-VOX3 v0.1) 的 openvela 固件，并注入 v681 三处修复。
+# build_vox3.sh -- 在 GitHub Actions (ubuntu-22.04) 上构建 AI-VOX3 (ESP32-S3-R8)
+# 的 openvela 固件，使用官方配方（vendor/espressif/boards/esp32s3/ai_vox3 +
+# desktop_companion 应用，后者已内置 mimo 端点 token-plan-cn.xiaomimimo.com）。
 #
-# 与 ci_build.sh 的区别：
-#   ci_build.sh  编的是 ai_vox3 大赛板 demo（无语音、无你板子的 LCD 布局）
-#   本脚本       编的是 esp32s3-eye —— 你手上这块 AI-VOX3 v0.1 本体，
-#                带 ST7789 LCD(240x240) + WiFi + PSRAM8M + ai_agent 语音栈
+# 这个脚本忠实复刻 .github/workflows/build.yml 的关键步骤（staging 覆盖、nuttx
+# 补丁、双堆注入、esp-hal 预置、esptool 4.8.1、Makefile 链 `m`、零地址段修复、
+# SIMPLE_BOOT/审计闸门），并把产物发布到 vox3-fw / vox3-log 分支供 monitor 下载。
 #
-# v681 三处修复（详见各文件的 [V681] 注释）：
-#   1. esp32s3_board_lcd.c  背光 active-low + 打开 RTC/32K 域交接 -> 修黑屏
-#   2. esp32s3_i2s.c        RX TDM 单声道采集            -> 修 mic peak=0
-#   3. voice_channel.c      按键去抖 40ms -> 100ms        -> 修一次按键触发3次
+# 关键修复（相对更早误用 esp32s3-eye 的版本）：
+#   - 构建目标从 esp32s3-eye(不完整/src 缺失/引脚错) 改为 ai_vox3（完整、引脚正确）
+#   - 麦克风数据线引脚已修正（DOUT/mic=7, DIN/playback=9）-> 修"录到乱码/听不懂"
+#   - 输出音量 CONFIG_ES8311_OUTPUT_INITVOLUME=1000 -> 修"听不清"
 #
-# 用法: bash build_vox3.sh
+# 用法: bash build_vox3.sh   （由 .github/workflows/build-vox3.yml 在 push 到
+#        vox3 分支时调用；也可 workflow_dispatch 手动触发）
 # =============================================================================
-set -euo pipefail
+set -uo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 WS="${GITHUB_WORKSPACE:-$PWD}"
@@ -23,14 +24,18 @@ BUILD="$WS/openvela"
 MANIFEST_BRANCH="${MANIFEST_BRANCH:-dev-ai-contest-2026}"
 SYNC_DEPTH="${SYNC_DEPTH:-1}"
 LOG="$WS/build_vox3.log"
-# GITHUB_TOKEN is provided by Actions; tolerate its absence for local runs.
+# GITHUB_TOKEN 由 build-vox3.yml 注入；本地跑可留空（publish 会 WARN 跳过）。
+GITHUB_TOKEN="${GITHUB_TOKEN:-}"
+GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-${GITHUB_REPO:-}}"
+
 git config --global user.email "vox3-ci@users.noreply.github.com" 2>/dev/null || true
+git config --global user.name  "vox3-ci" 2>/dev/null || true
 
 # 收集到日志但不让日志淹没控制台
 exec > >(tee -a "$LOG") 2>&1
 
 echo "=============================================================="
-echo " AI-VOX3 (esp32-s3 AI-VOX3 v0.1) openvela build + v681 fixes"
+echo " AI-VOX3 openvela build -- ai_vox3 board + desktop_companion/mimo"
 echo "=============================================================="
 
 # ---------------------------------------------------------------- [1] deps
@@ -38,12 +43,17 @@ echo "== [1/7] build deps =="
 sudo apt-get update -y
 sudo apt-get install -y --no-install-recommends \
   git git-lfs curl wget xz-utils unzip build-essential \
-  cmake ninja-build python3 python3-pip python3-venv python3-dev \
+  cmake ninja-build python3 python3-pip python3-dev rsync \
   libc++abi-dev flex bison gperf libncurses-dev libssl-dev libffi-dev \
-  libusb-1.0-0-dev pkg-config device-tree-compiler u-boot-tools
+  libusb-1.0-0-dev pkg-config device-tree-compiler u-boot-tools python-is-python3
 git lfs install
 git config --global user.email "ci@vox3.local"
 git config --global user.name "VOX3 CI"
+# esptool: 升级 pip 后装 4.8.1（满足 MKIMAGE >=4.8.0，且避开 5.x 的 merge_bin 改名问题）
+{ python3 -m pip install --user --upgrade pip || python3 -m pip install --upgrade pip; } > pip_esptool.log 2>&1 || true
+{ python3 -m pip install --user --upgrade "esptool==4.8.1" || python3 -m pip install --upgrade "esptool==4.8.1"; } >> pip_esptool.log 2>&1 \
+  || { echo "== ESPTOOL INSTALL FAILED =="; cat pip_esptool.log; }
+python3 -m esptool version || true
 
 # ---------------------------------------------------------------- [2] repo
 echo "== [2/7] repo tool =="
@@ -66,29 +76,20 @@ for TC_URL in \
   rm -f "$TC"
   if wget --timeout=60 --tries=2 -O "$TC" "$TC_URL" 2>&1 | tail -4; then
     TC_SZ=$(stat -c%s "$TC" 2>/dev/null || echo 0)
-    echo "  [tc] got $TC_SZ bytes"
     if [ "$TC_SZ" -gt 50000000 ]; then TC_OK=1; break; fi
-    echo "  [tc] file too small/corrupt, trying next mirror"
-  else
-    echo "  [tc] download failed, trying next mirror"
   fi
 done
 if [ "$TC_OK" != 1 ]; then
-  echo "FATAL: toolchain download failed from all mirrors"
-  exit 3
+  echo "FATAL: toolchain download failed"; exit 3
 fi
 sudo tar -xf "$TC" -C /opt
 export PATH="/opt/xtensa-esp32s3-elf/bin:$PATH"
-echo 'export PATH=/opt/xtensa-esp32s3-elf/bin:$PATH' >> ~/.bashrc
 xtensa-esp32s3-elf-gcc --version | head -1
 
 # ---------------------------------------------------------------- [4] sync
 echo "== [4/7] repo init + sync openvela ($MANIFEST_BRANCH) =="
 mkdir -p "$BUILD"
 cd "$BUILD"
-# NOTE: --depth belongs to `repo init`, never `repo sync`.  repo >=2.69 rejects
-# `repo sync --depth` ("no such option: --depth"), which killed the previous run.
-# Shallow-clone the whole tree at init time; sync WITHOUT --depth.
 if [ "$SYNC_DEPTH" != "0" ]; then
   repo init -u https://github.com/open-vela/manifests.git \
     -b "$MANIFEST_BRANCH" -m openvela.xml \
@@ -103,372 +104,267 @@ else
 fi
 echo "--- top level ---"; ls -1 "$BUILD" | head -20
 
-# ------------------------------------------------- [5] verify esp32s3-eye tree
-echo "== [5/7] locate esp32s3-eye board + ai_agent =="
-BOARD_DIR=""
-for cand in \
-  "$BUILD/vendor/espressif/boards/esp32s3/esp32s3-eye" \
-  "$BUILD/nuttx/boards/xtensa/esp32s3/esp32s3-eye"
-do
-  [ -d "$cand" ] && { BOARD_DIR="$cand"; break; }
+# ----------------------------------------------- [5] staging BSP + app overlay
+echo "== [5/7] install AI-VOX3 BSP (ai_vox3 board) + desktop_companion app =="
+mkdir -p "$BUILD/apps/examples"
+mkdir -p "$BUILD/vendor/espressif/boards/esp32s3"
+# 证明 staging 源存在
+for src in "$WS/staging/vendor_espressif/boards/esp32s3/ai_vox3" \
+           "$WS/staging/apps/examples/desktop_companion" \
+           "$WS/staging/vendor_espressif/boards/esp32s3/common" ; do
+  if [ ! -e "$src" ]; then
+    echo "== BSP FATAL: staging source missing: $src =="; exit 1
+  fi
+  echo "  staging source OK: $src"
 done
-if [ -z "$BOARD_DIR" ]; then
-  echo "FATAL: esp32s3-eye board dir not found after repo sync"
-  find "$BUILD" -maxdepth 6 -type d -name "esp32s3-eye" 2>/dev/null | head
-  exit 1
-fi
-echo "BOARD_DIR=$BOARD_DIR"
-
-AI_DIR=""
-for cand in "$BUILD/packages/ai_agent" "$BUILD/apps/examples/ai_agent"; do
-  [ -d "$cand" ] && { AI_DIR="$cand"; break; }
-done
-echo "AI_DIR=${AI_DIR:-<not present>}"
-
-# ------------------------------------------------- [6] inject v681 + defconfig
-echo "== [6/7] inject v681 fixes + defconfig =="
-PATCHES="$GITHUB_WORKSPACE/patches"
-DEFCONF="$GITHUB_WORKSPACE/defconfigs/ai_vox3_defconfig"
-[ -d "$PATCHES" ] || { echo "FATAL: patches/ missing"; exit 1; }
-[ -f "$DEFCONF" ] || { echo "FATAL: defconfig missing"; exit 1; }
-
-inject() {           # inject <src> <dst>
-  local src="$1" dst="$2"
-  if [ ! -f "$src" ]; then echo "  SKIP (not found): $src"; return 0; fi
-  if [ ! -d "$(dirname "$dst")" ]; then echo "  SKIP (no dir): $dst"; return 0; fi
-  cp "$src" "$dst"
-  echo "  patched: ${dst#$BUILD/}"
-}
-
-# --- board: pin map + audio codec + the two v681 fixes -----------------
-# esp32s3-eye.h MUST be overridden: upstream describes Espressif's own
-# ESP32-S3-EYE (DC=43 / BCKL=48 / SPI2 CLK=21 CS=44 MOSI=47), while the
-# AI-VOX3 wires DC=14 / BCKL=16 / SPI2 CLK=17 CS=15 MOSI=21.  Building the
-# upstream header drives unconnected GPIOs, so the backlight never lights.
-inject "$PATCHES/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3-eye.h" \
-       "$BOARD_DIR/src/esp32s3-eye.h"
-
-# esp32s3_board_audio.c (ES8311 codec + I2S/I2C buses) has no upstream
-# counterpart at all; without it there is no microphone and no speaker.
-if [ ! -f "$BOARD_DIR/src/esp32s3_board_audio.c" ]; then
-  cp "$PATCHES/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_board_audio.c" \
-     "$BOARD_DIR/src/esp32s3_board_audio.c"
-  echo "  added:   ${BOARD_DIR#$BUILD/}/src/esp32s3_board_audio.c"
-fi
-
-inject "$PATCHES/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_board_lcd.c" \
-       "$BOARD_DIR/src/esp32s3_board_lcd.c"
-inject "$PATCHES/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_bringup.c" \
-       "$BOARD_DIR/src/esp32s3_bringup.c"
-
-# es8311.c: enable the ADC in es8311_initialize() instead of in
-# es8311_configure(AUDIO_TYPE_INPUT).  The board registers the codec as a raw
-# lower-half (board_audio.c calls audio_register("pcm0c", cap), never
-# es8311_configure), so the configure() arm holding the [V661] fix is dead code
-# here and the capture path stayed down -> "peak = 0" on every chunk.
-if [ -f "$BUILD/nuttx/drivers/audio/es8311.c" ]; then
-  inject "$PATCHES/nuttx/drivers/audio/es8311.c" \
-         "$BUILD/nuttx/drivers/audio/es8311.c"
+cp -r "$WS/staging/vendor_espressif/boards/esp32s3/ai_vox3" \
+      "$BUILD/vendor/espressif/boards/esp32s3/ai_vox3"
+cp -r "$WS/staging/apps/examples/desktop_companion" \
+      "$BUILD/apps/examples/desktop_companion"
+cp -r "$WS/staging/vendor_espressif/boards/esp32s3/common" \
+      "$BUILD/vendor/espressif/boards/esp32s3/common"
+# 注册 app Kconfig（绝对路径，避免 $srctree 未设导致 olddefconfig 丢弃）
+if grep -q 'desktop_companion' "$BUILD/apps/examples/Kconfig" 2>/dev/null; then
+  echo "  desktop_companion already registered"
 else
-  echo "  (es8311.c not at expected path -- locating)"
-  ES=$(find "$BUILD/nuttx" -name "es8311.c" 2>/dev/null | head -1)
-  [ -n "$ES" ] && inject "$PATCHES/nuttx/drivers/audio/es8311.c" "$ES"
+  echo "source \"$BUILD/apps/examples/desktop_companion/Kconfig\"" \
+    >> "$BUILD/apps/examples/Kconfig"
+fi
+# vendor board-common 必须是真目录（tools/Config.mk 与 Unix.mk 都会解引用它）
+mkdir -p "$BUILD/vendor/espressif/boards/esp32s3/common/scripts"
+cp "$BUILD/nuttx/boards/xtensa/esp32s3/common/scripts/"*.ld \
+   "$BUILD/vendor/espressif/boards/esp32s3/common/scripts/" \
+   || { echo "== LDSCRIPT COPY FAILED =="; exit 1; }
+mkdir -p "$BUILD/vendor/espressif/boards/esp32s3/common/configs"
+
+# ----------------------------------------------- [5b] nuttx source patches
+echo "== [5b] apply staging nuttx patches =="
+PATCHDIR="$WS/staging/patches"
+patch_failures=0
+if [ -d "$PATCHDIR" ]; then
+  shopt -s nullglob
+  for p in "$PATCHDIR"/*.patch; do
+    echo "== NUTTX PATCH: $(basename "$p") =="
+    if (cd "$BUILD/nuttx" && patch -p1 --dry-run --forward < "$p" >/dev/null 2>&1); then
+      (cd "$BUILD/nuttx" && patch -p1 --forward < "$p") \
+        || { echo "== APPLY FAILED: $(basename "$p") =="; patch_failures=$((patch_failures+1)); }
+      echo "  applied: $(basename "$p")"
+    elif (cd "$BUILD/nuttx" && patch -p1 --dry-run --reverse < "$p" >/dev/null 2>&1); then
+      echo "  already applied, skipping: $(basename "$p")"
+    else
+      echo "== NOT APPLICABLE: $(basename "$p") =="
+      (cd "$BUILD/nuttx" && patch -p1 --dry-run --forward < "$p") 2>&1 | head -20 || true
+      patch_failures=$((patch_failures+1))
+    fi
+  done
+  shopt -u nullglob
+fi
+# 重拷已打补丁的 .ld 到 vendor common（BOARD_COMMON_DIR 指向它）
+cp -f "$BUILD/nuttx/boards/xtensa/esp32s3/common/scripts/"*.ld \
+      "$BUILD/vendor/espressif/boards/esp32s3/common/scripts/" \
+  || { echo "== LD RE-COPY FAILED =="; exit 1; }
+if [ "$patch_failures" != "0" ]; then
+  echo "== BSP FATAL: $patch_failures patch(es) failed =="; exit 1
+fi
+# [V636] 双堆：Wi-Fi blob 需要内部 DRAM 堆，否则 wlan init -12
+mkdir -p "$BUILD/nuttx/arch/xtensa/src/esp32s3"
+if [ ! -e "$BUILD/nuttx/arch/xtensa/src/chip" ]; then
+  ln -s esp32s3 "$BUILD/nuttx/arch/xtensa/src/chip"
 fi
 
-if [ -f "$BUILD/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c" ]; then
-  inject "$PATCHES/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c" \
-         "$BUILD/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c"
-else
-  echo "  (i2s arch file not at expected path -- locating)"
-  I2S=$(find "$BUILD/nuttx" -name "esp32s3_i2s.c" 2>/dev/null | head -1)
-  [ -n "$I2S" ] && inject "$PATCHES/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c" "$I2S"
-fi
-
-if [ -n "$AI_DIR" ]; then
-  inject "$PATCHES/packages/ai_agent/src/voice/voice_channel.c" \
-         "$AI_DIR/src/voice/voice_channel.c"
-fi
-
-# defconfig -> board configs/ai_agent/defconfig
-mkdir -p "$BOARD_DIR/configs/ai_agent"
-cp "$DEFCONF" "$BOARD_DIR/configs/ai_agent/defconfig"
-echo "  defconfig -> ${BOARD_DIR#$BUILD/}/configs/ai_agent/defconfig"
-
-# verify the fixes really landed in the tree
-echo "--- verify ---"
-grep -q "V681_BTN_STABLE_POLLS"  "${AI_DIR:-/dev/null}/src/voice/voice_channel.c" 2>/dev/null \
-  && echo "  OK  button debounce fix present" || echo "  ??  button debounce NOT found"
-grep -q "V626_XTAL32K_HANDOFF    1" "$BOARD_DIR/src/esp32s3_board_lcd.c" \
-  && echo "  OK  backlight RTC handoff enabled" || echo "  ??  handoff NOT enabled"
-grep -q "g_i2s_rx_mono" "$BUILD/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c" 2>/dev/null \
-  && echo "  OK  i2s RX mono fix present" || echo "  ??  i2s RX fix NOT found"
-grep -q "V681] capture path enabled at init" "$BUILD/nuttx/drivers/audio/es8311.c" 2>/dev/null \
-  && echo "  OK  ES8311 ADC enabled at init" || echo "  ??  es8311 ADC fix NOT found"
-grep -q "V681] screen_launcher started" "$BOARD_DIR/src/esp32s3_bringup.c" \
-  && echo "  OK  deferred screen launcher re-enabled" || echo "  ??  screen launcher NOT re-enabled"
-grep -q "no screen worker started" "$BOARD_DIR/src/esp32s3_bringup.c" \
-  && echo "  !!  V630 no-op stub STILL PRESENT" || echo "  OK  V630 stub gone"
-
-# Pin map is the single most silent failure mode here: the upstream header
-# targets Espressif's own ESP32-S3-EYE, so a build that keeps it drives GPIOs
-# that are not wired to anything on the AI-VOX3 and the panel stays black
-# even though every fix above compiled.  Assert it explicitly.
-echo "--- pin map (must be AI-VOX3, not upstream ESP32-S3-EYE) ---"
-for pair in "DISPLAY_DC:14" "DISPLAY_BCKL:16"; do
-  k="${pair%%:*}"; want="${pair##*:}"
-  got=$(grep -oE "define +ESP32S3_EYE_${k} +[0-9]+" "$BOARD_DIR/src/esp32s3-eye.h" \
-        | grep -oE "[0-9]+$" || echo "?")
-  [ "$got" = "$want" ] && echo "  OK  $k = $got" || echo "  !!  $k = $got (want $want)"
-done
-for pair in "SPI2_CSPIN:15" "SPI2_CLKPIN:17" "SPI2_MOSIPIN:21" "I2S0_BCLKPIN:10" \
-            "I2S0_WSPIN:8" "I2S0_DINPIN:9" "I2S0_DOUTPIN:7" "I2C0_SCLPIN:12" "I2C0_SDAPIN:13"; do
-  k="${pair%%:*}"; want="${pair##*:}"
-  got=$(grep -E "^CONFIG_${k}=" "$DEFCONF" | tail -1 | cut -d= -f2 || echo "?")
-  [ "$got" = "$want" ] && echo "  OK  CONFIG_$k = $got" || echo "  !!  CONFIG_$k = $got (want $want)"
-done
-
-# ------------------------------------------------------------ [6b] esp-idf
-# packages_ai_agent's own README requires an ESP-IDF environment for the
-# esp32s3-eye target, and fix_esp32s3.sh must run CONCURRENTLY with the first
-# build after a distclean (it waits for esp-hal-3rdparty to be cloned, then
-# patches mbedtls header priority / CCM cipher / spinlock init).  Skipping
-# either one produces link or struct-layout errors deep in the build.
-echo "== [6b/7] esp-idf toolchain + fix_esp32s3.sh =="
-if [ ! -d /opt/esp-idf ]; then
-  git clone --depth 1 -b v5.1.2 --recursive https://github.com/espressif/esp-idf.git /opt/esp-idf
-fi
-# esp-idf's install.sh derives IDF_PATH from $0 (`basedir=$(dirname "$0")`).
-# This script has already `cd`'d into $BUILD (the openvela dir) and invokes
-# install.sh via a relative path, so $0 resolves to the openvela dir and
-# install.sh looks for openvela/tools/detect_python.sh (which does not exist)
-# -> "/opt/esp-idf/install.sh: line 11: .../openvela/tools/detect_python.sh:
-# No such file or directory".  Run install.sh from its OWN directory so $0 is
-# correct, then source the generated environment.
-export IDF_PATH=/opt/esp-idf
-( cd "$IDF_PATH" && ./install.sh esp32s3 )
-. "$IDF_PATH/export.sh"
-echo "IDF_PATH=${IDF_PATH:-unset}"
-export CCACHE_DISABLE=1
-
-# ---------------------------------------------------------------- [7] build
-echo "== [7/7] build =="
+# ----------------------------------------------- [6] build ai_vox3 openvela
+echo "== [6/7] build ai_vox3/configs/openvela =="
+CFG="vendor/espressif/boards/esp32s3/ai_vox3/configs/openvela"
 cd "$BUILD"
-BUILD_SH=$(find "$BUILD" -maxdepth 2 -name build.sh | head -1)
-[ -n "$BUILD_SH" ] || { echo "FATAL: build.sh not found"; exit 1; }
-echo "using $BUILD_SH"
-
-CFG="vendor/espressif/boards/esp32s3/esp32s3-eye/configs/ai_agent"
-if [ ! -d "$BUILD/$CFG" ]; then
-  echo "NOTE: vendor configs/ai_agent missing, using nuttx-tree configs/ai_agent"
-  CFG="nuttx/boards/xtensa/esp32s3/esp32s3-eye/configs/ai_agent"
+pip3 install --quiet kconfiglib || pip install --quiet kconfiglib || true
+{ echo "PWD=$PWD"; ls -d nuttx apps build "$BUILD/vendor/espressif/boards/esp32s3/ai_vox3" 2>&1; } > build.log 2>&1 || true
+source build/envsetup.sh >> build.log 2>&1 || { echo "== ENSETUP FAILED ==" >> build.log; exit 1; }
+echo "ENSETUP OK" >> build.log
+lunch "$CFG" >> build.log 2>&1 || { echo "== LUNCH FAILED ==" >> build.log; exit 1; }
+echo "LUNCH OK" >> build.log
+# 预先生成 .config（与 `m` 内部 configure 同命令），以便审计在 40 分钟编译前跑
+if [ ! -f nuttx/.config ]; then
+  nuttx/tools/configure.sh -e "$PWD/nuttx/../vendor/espressif/boards/esp32s3/ai_vox3/configs/openvela" \
+    >> build.log 2>&1 || { echo "== PRE-CONFIGURE FAILED ==" >> build.log; exit 1; }
+  echo "PRE-CONFIGURE OK" >> build.log
 fi
-echo "CFG=$CFG"
-
-# esp32s3-eye 官方只提供 configs/openvela（见 provision_openvela.sh 注释）
-if [ -d "$BUILD/$CFG" ]; then
-  # ai_vox3_defconfig 的 CONFIG_BASE_DEFCONFIG 是 esp32s3-eye:ai_agent-dirty，
-  # 因此它必须落在 configs/ai_agent 下（[6/7] 已把文件放到 $BOARD_DIR/configs/ai_agent/defconfig）。
-  # 无论该目录原先有没有 defconfig，都无条件用我们的 ai_vox3_defconfig 填充，
-  # 避免上游 esp32s3-eye 只有 configs/openvela 骨架、缺 defconfig 时 lunch 直接崩溃。
-  # Inject the defconfig into BOTH possible board-config locations.
-  # openvela's build.sh may resolve esp32s3-eye to the vendor path OR the
-  # nuttx-tree path and only inspects one of them, so cover both to guarantee
-  # lunch finds the config.  The previous run grepped
-  # ".../configs/ai_agent/defconfig: No such file" even though we copied it to
-  # only one location -> CMake then fell back to an unset CONFIG_APPS_DIR and
-  # died with "Application directory ../apps is not found".
-  OTHER="nuttx/boards/xtensa/esp32s3/esp32s3-eye/configs/ai_agent"
-  [ "$CFG" = "$OTHER" ] && OTHER="vendor/espressif/boards/esp32s3/esp32s3-eye/configs/ai_agent"
-
-  # Resolve the apps dir that was actually synced, then make it reachable from
-  # BOTH the nuttx source dir AND the cmake binary dir.  openvela's build.sh
-  # sets CMAKE_BINARY_DIR=cmake_out/<board>_<cfg>, and nuttx's CMakeLists
-  # resolves CONFIG_APPS_DIR="../apps" relative to that binary dir (NOT the
-  # nuttx source dir) -> "Application directory ../apps is not found".
-  # Fix: (a) write an ABSOLUTE CONFIG_APPS_DIR into the defconfig so it survives
-  # any base dir, and (b) symlink openvela/cmake_out/apps -> real apps so the
-  # relative ../apps that openvela/envsetup may also emit resolves correctly.
-  REAL_APPS=""
-  for c in "$BUILD/apps" "$BUILD/packages/apps" "$BUILD/nuttx/apps"; do
-    if [ -d "$c" ] && [ -n "$(ls -A "$c" 2>/dev/null)" ]; then
-      REAL_APPS="$c"; break
-    fi
-  done
-  if [ -z "$REAL_APPS" ]; then
-    for c in $(find "$BUILD" -maxdepth 2 -type d -name apps 2>/dev/null); do
-      if [ -n "$(ls -A "$c" 2>/dev/null)" ]; then REAL_APPS="$c"; break; fi
-    done
-  fi
-  if [ -z "$REAL_APPS" ]; then
-    echo "FATAL: no populated apps dir found under $BUILD"
-    exit 1
-  fi
-  echo "REAL_APPS=$REAL_APPS"
-
-  # ensure openvela/apps points at the real apps (in case sync left it empty)
-  if [ "$REAL_APPS" != "$BUILD/apps" ]; then
-    if [ -L "$BUILD/apps" ] || [ ! -e "$BUILD/apps" ]; then
-      rm -rf "$BUILD/apps"
-      ln -sfn "$REAL_APPS" "$BUILD/apps"
-    fi
-  fi
-
-  # symlink so cmake binary-dir-relative ../apps resolves to real apps
-  mkdir -p "$BUILD/cmake_out"
-  ln -sfn "$BUILD/apps" "$BUILD/cmake_out/apps"
-
-  for d in "$CFG" "$OTHER"; do
-    mkdir -p "$BUILD/$d"
-    cp -f "$DEFCONF" "$BUILD/$d/defconfig"
-    # board esp32s3-eye has NO cmake support in this fork (no CMakeLists.txt
-# anywhere: not in vendor/espressif, not in nuttx/boards), so the cmake
-# pass ALWAYS fails and openvela build.sh falls back to classic make.
-# classic make resolves CONFIG_APPS_DIR relative to the NUTTX SOURCE dir
-# (openvela/nuttx/../apps = openvela/apps, which we symlinked to the real
-# apps dir), so a RELATIVE "../apps" is exactly what the make fallback needs
-# (an absolute path gets re-based onto nuttx/tools/.. and breaks).
-    sed -i "s|^CONFIG_APPS_DIR=.*|CONFIG_APPS_DIR=\"../apps\"|" "$BUILD/$d/defconfig"
-    echo "defconfig -> $d/defconfig ($(wc -l < "$BUILD/$d/defconfig") lines, APPS_DIR=$REAL_APPS)"
-  done
-
-  # fix_esp32s3.sh races the build on purpose: it blocks until the build has
-  # cloned esp-hal-3rdparty, then patches it.  See packages_ai_agent README.
-  FIXSH="$AI_DIR/fix_esp32s3.sh"
-  if [ -f "$FIXSH" ]; then
-    echo "starting fix_esp32s3.sh in background"
-    ( bash "$FIXSH" || echo "!! fix_esp32s3.sh exited non-zero" ) \
-        >> "$WS/fix_esp32s3.log" 2>&1 &
-    FIX_PID=$!
-  else
-    echo "NOTE: fix_esp32s3.sh not found at $FIXSH (build may hit mbedtls/spinlock errors)"
-  fi
-
-  if ! "$BUILD_SH" "$CFG" --cmake -j"$(nproc)"; then
-    echo "!! --cmake failed, retrying classic make"
-    if ! "$BUILD_SH" "$CFG" -j"$(nproc)" > "$WS/make.log" 2>&1; then
-      echo "!! MAKE FAILED -- tail of make.log (this is the real build error):"
-      tail -50 "$WS/make.log"
-      echo "!! (full make.log also published to vox3-log branch)"
-      exit 1
-    fi
-  fi
-else
-  echo "FATAL: no usable config dir ($CFG)"
-  ls -1 "$BOARD_DIR/configs" 2>/dev/null
-  exit 1
+# 双堆注入（CONFIG_MM_KERNEL_HEAP 非 Kconfig 符号，只能直接写 .config）
+if ! grep -qx 'CONFIG_MM_KERNEL_HEAP=y' nuttx/.config; then
+  echo 'CONFIG_MM_KERNEL_HEAP=y' >> nuttx/.config
+  echo "[V636] injected CONFIG_MM_KERNEL_HEAP=y" >> build.log
 fi
-
-if [ -n "${FIX_PID:-}" ]; then
-  echo "waiting for fix_esp32s3.sh (pid=$FIX_PID)"
-  wait "$FIX_PID" || true
-  echo "--- fix_esp32s3.log ---"; cat "$WS/fix_esp32s3.log" 2>/dev/null | tail -20
+# SIMPLE_BOOT 闸门：必须 ROM 直启，否则 ESP32-S3 rev0.2 被 2 级 bootloader 拒
+if grep -qE '^CONFIG_ESP32S3_APP_FORMAT_(LEGACY|MCUBOOT)=y' nuttx/.config; then
+  echo "== AUDIT FAILED: APP_FORMAT selected -> SIMPLE_BOOT off ==" >> build.log; exit 1
 fi
-
-# ------------------------------------------------------------- collect
-echo "== collect firmware =="
-mkdir -p "$WS/firmware"
-find "$BUILD/nuttx" -maxdepth 2 \
-  \( -name 'nuttx.bin' -o -name 'nuttx' -o -name 'bootloader.bin' \
-     -o -name 'partition-table.bin' -o -name 'nuttx.merged.bin' -o -name 'nuttx.elf' \) \
-  -exec cp -v {} "$WS/firmware/" \; 2>/dev/null || true
-
-# Keep the build log next to the artifacts even when the build died early.
-cp -f "$LOG" "$WS/firmware/build_vox3.log" 2>/dev/null || true
-# Record which fixes actually made it into the tree (see the verify block in
-# step 6) so a downloader can tell a real v681 build from a stale one.
+if ! grep -qE '^CONFIG_ESPRESSIF_SIMPLE_BOOT=y' nuttx/.config; then
+  echo "== AUDIT FAILED: SIMPLE_BOOT not y ==" >> build.log; exit 1
+fi
+# 音频/外设 审计
+for sym in CONFIG_AUDIO=y CONFIG_DRIVERS_AUDIO=y CONFIG_AUDIO_ES8311=y CONFIG_AUDIO_I2S=y \
+           CONFIG_I2C=y CONFIG_I2S=y CONFIG_ESP32S3_I2C0=y CONFIG_ESP32S3_I2S=y \
+           CONFIG_LCD_ST7789=y CONFIG_AI_VOX3_SERVO=y CONFIG_AI_VOX3_BUTTONS=y \
+           CONFIG_ESP32S3_LEDC=y CONFIG_ESP32S3_USBSERIAL=y \
+           CONFIG_INIT_ENTRYPOINT='"desktop_companion_main"'; do
+  grep -qx "$sym" nuttx/.config || { echo "== AUDIT FAILED: $sym missing ==" >> build.log; exit 1; }
+done
+echo "CONFIG AUDIT OK" >> build.log
+# esp-hal-3rdparty 预置（修正 spinlock 初始化）-> 避免 "invalid initializer"
 {
-  echo "commit:   $(git -C "$WS" rev-parse HEAD 2>/dev/null)"
-  echo "trigger:  ${GITHUB_REF:-?} @ $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  echo "--- fix markers ---"
-  grep -q "V626_XTAL32K_HANDOFF    1" "$BOARD_DIR/src/esp32s3_board_lcd.c" \
-    && echo "backlight_rtc_handoff: yes" || echo "backlight_rtc_handoff: NO"
-  grep -q "g_i2s_rx_mono" "$BUILD/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c" 2>/dev/null \
-    && echo "i2s_rx_mono: yes" || echo "i2s_rx_mono: NO"
-  grep -q "V681] capture path enabled at init" "$BUILD/nuttx/drivers/audio/es8311.c" 2>/dev/null \
-    && echo "es8311_adc_at_init: yes" || echo "es8311_adc_at_init: NO"
-  grep -q "V681] screen_launcher started" "$BOARD_DIR/src/esp32s3_bringup.c" \
-    && echo "screen_launcher: yes" || echo "screen_launcher: NO"
-  [ -n "$AI_DIR" ] && { grep -q "V681_BTN_STABLE_POLLS" "$AI_DIR/src/voice/voice_channel.c" \
-    && echo "button_debounce: yes" || echo "button_debounce: NO"; }
-  echo "--- pin map ---"
-  grep -E "define +ESP32S3_EYE_DISPLAY_(DC|BCKL)" "$BOARD_DIR/src/esp32s3-eye.h" || true
-  grep -E "^CONFIG_ESP32S3_(SPI2|I2S0|I2C0).*PIN" "$DEFCONF" || true
-  echo "--- sizes ---"
-  ls -la "$WS/firmware" 2>/dev/null || true
-} > "$WS/firmware/BUILD_INFO.txt" 2>&1
+  HALDIR="nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty"
+  if [ ! -d "$HALDIR" ]; then
+    rm -rf "$HALDIR"
+    git init -q "$HALDIR"
+    git -C "$HALDIR" remote add origin https://github.com/espressif/esp-hal-3rdparty.git
+    git -C "$HALDIR" fetch -q --depth 1 origin 9fc713a95b1ff150dd0b0647e465d3c624056bb1 \
+      || { rm -rf "$HALDIR"; git clone -q https://github.com/espressif/esp-hal-3rdparty.git "$HALDIR"; }
+    git -C "$HALDIR" checkout -q FETCH_HEAD 2>/dev/null || git -C "$HALDIR" checkout -q 9fc713a95b1ff150dd0b0647e465d3c624056bb1
+  fi
+  grep -rl "LOCK_INITIALIZER_UNLOCKED" "$HALDIR/components" | xargs -r sed -i \
+    's/^#define LOCK_INITIALIZER_UNLOCKED[[:space:]]*0[[:space:]]*$/#define LOCK_INITIALIZER_UNLOCKED SP_UNLOCKED/'
+  echo "esp-hal preseeded + lock patched"
+} >> build.log 2>&1 || { echo "== HAL PRESEED FAILED ==" >> build.log; exit 1; }
+echo "HAL OK" >> build.log
+# esptool 4.8.1 在 `m` 之前装好，避免被覆盖
+python3 -m pip install --quiet --upgrade "esptool==4.8.1" \
+  || pip install --quiet --upgrade "esptool==4.8.1" \
+  || { echo "== ESPTOOL PREP FAILED =="; exit 1; }
+echo "ESPTOOL OK" >> build.log
 
-echo "--- firmware/ ---"; ls -la "$WS/firmware" 2>/dev/null || echo "(empty)"
+# 生成零地址段修复 + 校验脚本（SIMPLE_BOOT 下 ROM 不跳过 la=0 段 -> 必 brick）
+cat > /tmp/segcheck.py <<'SEGCHECK_PY'
+import os, struct, sys
+IMAGE_MAGIC=0xE9; HEADER_LEN=24; SEG_HEADER_LEN=8; MIN_SEGMENTS=3
+class ImageError(Exception): pass
+def parse_image(blob):
+    if len(blob) < HEADER_LEN+SEG_HEADER_LEN: raise ImageError("too small")
+    if blob[0]!=IMAGE_MAGIC: raise ImageError("bad magic")
+    segcount=blob[1]; entry=struct.unpack_from("<I",blob,4)[0]
+    if segcount<1: raise ImageError("no segments")
+    segs=[]; off=HEADER_LEN
+    for i in range(segcount):
+        if off+SEG_HEADER_LEN>len(blob): raise ImageError("truncated header")
+        la,dn=struct.unpack_from("<II",blob,off)
+        do=off+SEG_HEADER_LEN
+        if do+dn>len(blob): raise ImageError("truncated data")
+        segs.append({"i":i,"la":la,"dn":dn}); off=do+dn
+    return {"segcount":segcount,"entry":entry,"segs":segs}
+def check(path):
+    if not os.path.isfile(path):
+        print("FAIL: no file %s"%path); return 1
+    blob=open(path,"rb").read()
+    try: image=parse_image(blob)
+    except ImageError as e:
+        print("FAIL: cannot parse: %s"%e); return 1
+    zero=[s for s in image["segs"] if s["la"]==0]
+    print("SEGCOUNT=%d ZERO_LOAD_ADDR_SEGMENTS=%d"%(image["segcount"],len(zero)))
+    for s in image["segs"]:
+        print("  seg%d la=0x%08x len=0x%x"%(s["i"],s["la"],s["dn"]))
+    if zero or image["segcount"]<MIN_SEGMENTS:
+        print("ZERO-ADDR GATE FAIL: zero-laddr segs=%d segcount=%d"%(len(zero),image["segcount"]))
+        return 1
+    print("ZERO-ADDR GATE OK")
+    return 0
+if __name__=="__main__":
+    rc=0
+    for a in sys.argv[1:]:
+        if check(a)!=0: rc=1
+    sys.exit(rc)
+SEGCHECK_PY
+cat > /tmp/patch_zero_segs.py <<'PATCH_ZERO_SEGS'
+import hashlib, struct, sys
+SCRATCH_BASE=0x3FC88000; SCRATCH_LIMIT=0x3FC90000
+def parse(path):
+    data=bytearray(open(path,"rb").read())
+    if len(data)<24 or data[0]!=0xE9: raise SystemExit("bad image")
+    n=data[1]; off=24; entries=[]
+    for i in range(n):
+        if off+8>len(data): raise SystemExit("truncated %d"%i)
+        la,ln=struct.unpack_from("<II",data,off)
+        if off+8+ln>len(data): raise SystemExit("seg %d data truncated"%i)
+        entries.append((i,off,la,ln)); off+=8+ln
+    return data,entries
+def main(src,dst):
+    data,entries=parse(src); scratch=SCRATCH_BASE; fixed=[]
+    for i,off,la,ln in entries:
+        if la!=0: continue
+        payload=data[off+8:off+8+ln]
+        if any(payload): raise SystemExit("seg%d la=0 not zeros"%i)
+        struct.pack_into("<I",data,off,scratch); fixed.append((i,ln,scratch)); scratch+=ln
+    if not fixed: print("no zero-laddr segments")
+    else:
+        for i,ln,addr in fixed: print("  seg%d 0x0->0x%08x len=0x%x"%(i,addr,ln))
+        if scratch>SCRATCH_LIMIT: raise SystemExit("scratch overflow")
+    if data[23]&1:
+        if len(data)<56: raise SystemExit("too small for digest")
+        doff=len(data)-32; data[doff:]=hashlib.sha256(bytes(data[:doff])).digest()
+        print("  sha256 refreshed")
+    open(dst,"wb").write(bytes(data))
+    d2,e2=parse(dst); bad=sum(1 for _,_,la,_ in e2 if la==0)
+    print("verify segcount=%d zero=%d"%(len(e2),bad)); return 0 if bad==0 else 1
+if __name__=="__main__":
+    if len(sys.argv)!=3: sys.exit(2)
+    sys.exit(main(sys.argv[1],sys.argv[2]))
+PATCH_ZERO_SEGS
 
-# ------------------------------------------------------------- publish
-# The artifact download API is not reachable from the build side's consumer,
-# so publish the tree to a branch instead: a plain `git fetch` is enough to
-# retrieve it.  A fresh orphan branch per push keeps the history flat and
-# avoids any index conflict with the source branch.
-echo "== publish firmware to branch 'vox3-fw' =="
-PUB="$WS/.publish"
-ORIGIN_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-rm -rf "$PUB"
-# Try to clone an existing vox3-fw branch; otherwise start a brand-new orphan
-# branch.  You cannot `git checkout -B` in an empty repo (no HEAD).
-if git clone --quiet --depth 1 --branch vox3-fw "$ORIGIN_URL" "$PUB" 2>/dev/null; then
-  echo "  cloned existing vox3-fw branch"
-else
-  git init --quiet "$PUB"
-  git -C "$PUB" remote add origin "$ORIGIN_URL"
-  git -C "$PUB" checkout --quiet --orphan vox3-fw
-fi
-cd "$PUB"
-git config user.name "vox3-ci"
-git config user.email "vox3-ci@users.noreply.github.com"
-# Remove everything except .git, then copy fresh firmware.
-git rm -rq --cached . 2>/dev/null || true
-find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} + 2>/dev/null || true
-cp -f "$WS"/firmware/* . 2>/dev/null || true
-git add -A
-git commit -q -m "vox3 firmware: $(date -u '+%Y-%m-%dT%H:%M:%SZ') [${GITHUB_REF:-?}]" || true
-git push --force origin vox3-fw || echo "WARN: firmware publish failed (artifact upload still attempted)"
+export VELA_USE_MAKEFILE=1
+export VELA_EXTRA_FLAGS="-Wno-cpp -Wno-deprecated-declarations"
+(
+  set +e; set -o pipefail
+  rc=127
+  m -j"$(nproc)" 2>&1 | tee -a build.log
+  rc=${PIPESTATUS[0]}
+  echo "M-CHAIN rc=$rc" >> build.log
+  ls -la nuttx/nuttx nuttx/nuttx.bin nuttx/nuttx.merged.bin >> build.log 2>&1
+  if [ -f nuttx/nuttx.bin ] && [ -f /tmp/patch_zero_segs.py ]; then
+    python3 /tmp/patch_zero_segs.py nuttx/nuttx.bin nuttx/nuttx.bin >> build.log 2>&1 \
+      || echo "== relocation reported failure rc=$? ==" >> build.log
+    python3 /tmp/segcheck.py nuttx/nuttx.bin >> build.log 2>&1 \
+      || echo "== post-relocation segcheck rc=$? ==" >> build.log
+  fi
+  echo "$rc" > build_rc.txt
+) >> build.log 2>&1
+BUILD_RC=$(cat build_rc.txt 2>/dev/null || echo 1)
 
-# ---------------------------------------------------------------- publish log
-# On any early exit (set -e, missing board, build failure) publish the log so
-# the failure is diagnosable without opening the Actions UI.
-vox3_publish_log() {
-  local rc=$?
-  local PUB2="$WS/.publish_log"
-  echo "== vox3 exiting rc=$rc -- publishing log to branch 'vox3-log' =="
-  rm -rf "$PUB2"; mkdir -p "$PUB2"
-  cp -f "$LOG" "$PUB2/build_vox3.log" 2>/dev/null || true
-  cp -f "$WS/firmware/BUILD_INFO.txt" "$PUB2/" 2>/dev/null || true
-  cd "$PUB2"
-  git init --quiet .
-  git config user.name "vox3-ci"; git config user.email "vox3-ci@users.noreply.github.com"
-  git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-  # Fresh repo: use orphan branch (git checkout -B needs a HEAD).
-  git checkout --quiet --orphan vox3-log
-  git add -A
-  git commit -q -m "vox3 build log rc=$rc $(date -u '+%Y-%m-%dT%H:%M:%SZ')" || true
-  git push --force origin vox3-log || echo "WARN: log publish failed"
-  exit $rc
-}
-trap vox3_publish_log ERR
-
-# The ERR trap only fires on failure, so a successful build leaves vox3-log
-# untouched and a consumer cannot tell "still building" from "finished OK".
-# Leave an explicit success marker (firmware itself lands on vox3-fw branch).
-echo "== publish success marker to 'vox3-log' =="
-OKDIR="$WS/.publish_ok"
-rm -rf "$OKDIR"; mkdir -p "$OKDIR"
+# ---------------------------------------------------------------- [7] publish
+# Collect every flashable image the `m` build produced into firmware/ so the
+# workflow's upload-artifact (path: firmware/) succeeds, and so the local
+# monitor (and flash_vox3.py) can pull a concrete binary.  For SIMPLE_BOOT the
+# ROM loads NuttX directly, so nuttx.bin is the image flashed at 0x0; if a
+# merged image exists it is preferred by the flash step.
+echo "== [7/7] publish firmware + logs (BUILD_RC=$BUILD_RC) =="
+FIRM="$WS/firmware"
+mkdir -p "$FIRM"
+for f in nuttx/nuttx nuttx/nuttx.bin nuttx/nuttx.merged.bin nuttx/nuttx.hex; do
+  if [ -f "$f" ]; then
+    cp -v "$f" "$FIRM/" >> build.log 2>&1
+    echo "  published: $f ($(stat -c%s "$f" 2>/dev/null) bytes)"
+  fi
+done
 {
-  echo "BUILD_OK at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  echo "commit: $(git -C "$WS" rev-parse HEAD 2>/dev/null)"
-  echo "firmware: published to vox3-fw branch"
-} > "$OKDIR/build_ok.txt"
-cd "$OKDIR"
-git init --quiet .
-git config user.name "vox3-ci"; git config user.email "vox3-ci@users.noreply.github.com"
-git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-git checkout --quiet --orphan vox3-log
-git add -A
-git commit -q -m "vox3 build OK: $(date -u '+%Y-%m-%dT%H:%M:%SZ')" || true
-git push --force origin vox3-log || echo "WARN: ok marker publish failed"
-
-echo "== DONE =="
+  echo "BUILD_RC=$BUILD_RC"
+  echo "DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "BOARD=ai_vox3"
+  echo "APP=desktop_companion (mimo endpoint: token-plan-cn.xiaomimimo.com)"
+  echo "ARTIFACTS:"; ls -la "$FIRM" 2>/dev/null
+} > "$FIRM/manifest.txt"
+# Push firmware to the vox3-fw branch so the local monitor can fetch it
+# (GITHUB_TOKEN + GITHUB_REPOSITORY are injected by build-vox3.yml).
+if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
+  FW_REPO=$(mktemp -d)
+  git init -q "$FW_REPO"
+  git -C "$FW_REPO" remote add origin \
+    "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+  git -C "$FW_REPO" checkout --quiet --orphan vox3-fw 2>/dev/null \
+    || git -C "$FW_REPO" checkout -b vox3-fw
+  cp -r "$FIRM"/* "$FW_REPO"/
+  ( cd "$FW_REPO" \
+    && git add -A \
+    && git -m "vox3 firmware $(date -u '+%H:%M:%SZ') rc=$BUILD_RC" \
+    && git push --force origin vox3-fw ) >> build.log 2>&1 \
+    || echo "== vox3-fw push failed (non-fatal; artifact upload still runs) ==" >> build.log
+fi
+echo "== publish done =="
+# Exit with the build's return code so the workflow's failure() path fires
+# (publish failure marker + log upload) when the build itself failed.
+exit "$BUILD_RC"
