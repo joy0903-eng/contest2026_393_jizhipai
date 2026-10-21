@@ -318,14 +318,16 @@ PATCH_ZERO_SEGS
 
 export VELA_USE_MAKEFILE=1
 export VELA_EXTRA_FLAGS="-Wno-cpp -Wno-deprecated-declarations"
-# 直接重定向(log 见顶部 exec)让每行即时落盘；这里给 `m` 加 180m 硬超时：
-# 若免费 runner 太慢或构建挂死，超时即清晰失败(rc=124)，不再熬满 6h 才被强杀。
+# `m` 是 build/envsetup.sh 定义的 shell 函数，必须在已 source envsetup 的
+# 当前 shell 里直接调用；不能用 `timeout m ...` 包裹——timeout 是独立进程，
+# 只认外部命令、看不到 shell 函数，会报 "No such file or directory"（第10次CI 就是这个坑）。
+# 硬超时交给 build-vox3.yml 的 job timeout-minutes: 240 兜底。
 set +e
-echo "== [6b] starting 'm' build (hard timeout 180m) =="
-timeout -k 30 180m m -j"$(nproc)"
+echo "== [6b] starting 'm' build (envsetup shell function, current shell) =="
+m -j"$(nproc)"
 BUILD_RC=$?
-if [ "$BUILD_RC" -eq 124 ] || [ "$BUILD_RC" -eq 137 ]; then
-  echo "== BUILD TIMEOUT/KILL (rc=$BUILD_RC): 'm' exceeded 180m -- slow free runner or hang ==" >> build.log
+if [ "$BUILD_RC" -ne 0 ]; then
+  echo "== BUILD FAILED (rc=$BUILD_RC): see build log above for the real error ==" >> build.log
 fi
 echo "M-CHAIN rc=$BUILD_RC" >> build.log
 ls -la nuttx/nuttx nuttx/nuttx.bin nuttx/nuttx.merged.bin >> build.log 2>&1
