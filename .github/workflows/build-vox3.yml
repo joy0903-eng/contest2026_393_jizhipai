@@ -23,7 +23,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 360
+    timeout-minutes: 240
     env:
       MANIFEST_BRANCH: dev-ai-contest-2026
       SYNC_DEPTH: '1'
@@ -124,16 +124,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -x
-          # The announce step sets this, but announce itself is a candidate
-          # for failure -- never depend on a previous step having run.
           git config --global user.email "vox3-ci@users.noreply.github.com"
           git config --global user.name  "vox3-ci"
           mkdir -p .failed
+          # 把完整 build 日志也带进标记仓库：Actions 的 log 产物这边无 token 下载
+          # 不了，但推到分支后可用 `git show origin/vox3-log:build_vox3.log` 读全文。
+          cp -f build_vox3.log .failed/build_vox3.log 2>/dev/null || echo "(no build_vox3.log to copy)"
           {
             echo "FAILED at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
             echo "commit: $(git rev-parse HEAD 2>/dev/null || echo ?)"
-            echo "--- tail of build_vox3.log ---"
-            tail -60 build_vox3.log 2>/dev/null || echo "(no build_vox3.log)"
+            echo "--- tail of build_vox3.log (last 200) ---"
+            tail -200 build_vox3.log 2>/dev/null || echo "(no build_vox3.log)"
+            echo "--- KEY ERROR LINES (grep) ---"
+            grep -iE 'error:|fatal|undefined reference|No such file|command not found|TIMEOUT|segmentation fault|recipe for target|No rule to make|Build exceeded' build_vox3.log 2>/dev/null | tail -100 || echo "(no matches)"
           } > .failed/failure.txt
           cd .failed
           git init --quiet .

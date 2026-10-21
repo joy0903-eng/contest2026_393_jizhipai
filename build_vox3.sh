@@ -31,8 +31,12 @@ GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-${GITHUB_REPO:-}}"
 git config --global user.email "vox3-ci@users.noreply.github.com" 2>/dev/null || true
 git config --global user.name  "vox3-ci" 2>/dev/null || true
 
-# 收集到日志但不让日志淹没控制台
-exec > >(tee -a "$LOG") 2>&1
+# 收集到日志但不让日志淹没控制台。
+# 注意：早期版本用 `exec > >(tee -a "$LOG")`，经管道 tee 是块缓冲；CI 在 job
+# 超时(6h)被 SIGKILL 时缓冲区未刷盘，真实报错丢失，failure.txt 只剩 [6/7] 之前。
+# 改成直接重定向：write() 进内核页缓存即刻落盘，SIGKILL 也不丢，失败标记 step
+# 就能 `git show origin/vox3-log:build_vox3.log` 拿到完整日志定位真因。
+exec > "$LOG" 2>&1
 
 echo "=============================================================="
 echo " AI-VOX3 openvela build -- ai_vox3 board + desktop_companion/mimo"
@@ -309,22 +313,24 @@ PATCH_ZERO_SEGS
 
 export VELA_USE_MAKEFILE=1
 export VELA_EXTRA_FLAGS="-Wno-cpp -Wno-deprecated-declarations"
-(
-  set +e; set -o pipefail
-  rc=127
-  m -j"$(nproc)" 2>&1 | tee -a build.log
-  rc=${PIPESTATUS[0]}
-  echo "M-CHAIN rc=$rc" >> build.log
-  ls -la nuttx/nuttx nuttx/nuttx.bin nuttx/nuttx.merged.bin >> build.log 2>&1
-  if [ -f nuttx/nuttx.bin ] && [ -f /tmp/patch_zero_segs.py ]; then
-    python3 /tmp/patch_zero_segs.py nuttx/nuttx.bin nuttx/nuttx.bin >> build.log 2>&1 \
-      || echo "== relocation reported failure rc=$? ==" >> build.log
-    python3 /tmp/segcheck.py nuttx/nuttx.bin >> build.log 2>&1 \
-      || echo "== post-relocation segcheck rc=$? ==" >> build.log
-  fi
-  echo "$rc" > build_rc.txt
-) >> build.log 2>&1
-BUILD_RC=$(cat build_rc.txt 2>/dev/null || echo 1)
+# 直接重定向(log 见顶部 exec)让每行即时落盘；这里给 `m` 加 180m 硬超时：
+# 若免费 runner 太慢或构建挂死，超时即清晰失败(rc=124)，不再熬满 6h 才被强杀。
+set +e
+echo "== [6b] starting 'm' build (hard timeout 180m) =="
+timeout -k 30 180m m -j"$(nproc)"
+BUILD_RC=$?
+if [ "$BUILD_RC" -eq 124 ] || [ "$BUILD_RC" -eq 137 ]; then
+  echo "== BUILD TIMEOUT/KILL (rc=$BUILD_RC): 'm' exceeded 180m -- slow free runner or hang ==" >> build.log
+fi
+echo "M-CHAIN rc=$BUILD_RC" >> build.log
+ls -la nuttx/nuttx nuttx/nuttx.bin nuttx/nuttx.merged.bin >> build.log 2>&1
+if [ -f nuttx/nuttx.bin ] && [ -f /tmp/patch_zero_segs.py ]; then
+  python3 /tmp/patch_zero_segs.py nuttx/nuttx.bin nuttx/nuttx.bin >> build.log 2>&1 \
+    || echo "== relocation reported failure rc=$? ==" >> build.log
+  python3 /tmp/segcheck.py nuttx/nuttx.bin >> build.log 2>&1 \
+    || echo "== post-relocation segcheck rc=$? ==" >> build.log
+fi
+echo "$BUILD_RC" > build_rc.txt
 
 # ---------------------------------------------------------------- [7] publish
 # Collect every flashable image the `m` build produced into firmware/ so the
