@@ -373,7 +373,7 @@ if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
   cp -r "$FIRM"/* "$FW_REPO"/
   ( cd "$FW_REPO" \
     && git add -A \
-    && git -m "vox3 firmware $(date -u '+%H:%M:%SZ') rc=$BUILD_RC" \
+    && git commit -m "vox3 firmware $(date -u '+%H:%M:%SZ') rc=$BUILD_RC" \
     && git push --force origin vox3-fw ) >> build.log 2>&1 \
     || echo "== vox3-fw push failed (non-fatal; artifact upload still runs) ==" >> build.log
 fi
