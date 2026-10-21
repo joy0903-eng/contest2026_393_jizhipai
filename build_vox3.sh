@@ -16,7 +16,12 @@
 # 用法: bash build_vox3.sh   （由 .github/workflows/build-vox3.yml 在 push 到
 #        vox3 分支时调用；也可 workflow_dispatch 手动触发）
 # =============================================================================
-set -uo pipefail
+# 注意：不要用 `set -u`。openvela 的 build/envsetup.sh 内部会引用若干
+# 当时尚未定义的变量（如 $TOP/$OUT 等），在 `set -u` 下 `source` 它时一旦
+# 碰到未绑定变量就会直接 `exit`，脚本当场死掉，连 `||` 兜底都来不及跑，
+# 日志停在 "[6/7] build..." 之后一片空白（第 9 次 CI 就是这个坑）。
+# 官方 build.yml 能过是因为 GitHub 默认 `set -e` 不带 `-u`。
+set -o pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 WS="${GITHUB_WORKSPACE:-$PWD}"
