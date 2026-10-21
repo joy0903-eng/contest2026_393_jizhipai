@@ -1078,8 +1078,11 @@ int main(int argc, char *argv[])
                */
               rearm_mic();
 
-              /* Periodic weather refresh. */
-              if (loop % WEATHER_INTERVAL_LOOP == 0 && net_is_connected())
+              /* Periodic weather refresh — DISABLED per request: keep voice
+               * interaction, drop the weather broadcast. The branch is kept
+               * referenced (0 && ...) so the symbols still link and no
+               * unused-symbol warning breaks the build. */
+              if (0 && loop % WEATHER_INTERVAL_LOOP == 0 && net_is_connected())
                 {
                   if (net_get_weather(weather_desc, sizeof(weather_desc),
                                       &temp) == OK)
