@@ -258,7 +258,13 @@ CONFIG_SCHED_WORKQUEUE=y
 
 # --- Wi-Fi + network stack ---------------------------------------------------
 CONFIG_ESP32S3_WIFI=y
-CONFIG_ESP32S3_WIFI_SAVE_PARAM=y
+# Disable persisting Wi-Fi/network params to NVS.  A stale static IP
+# (192.168.110.154) was being restored from NVS and overriding the DHCP
+# address (192.168.110.185); the router drops traffic from the
+# non-DHCP-assigned IP, so the device could not even reach its own gateway
+# (probe gw:80 = -110, cloud connect select=0).  Forcing pure DHCP from the
+# firmware defconfig (SSID/pass below) restores outbound connectivity.
+CONFIG_ESP32S3_WIFI_SAVE_PARAM=n
 CONFIG_ESP32S3_WIFI_STATION=y
 
 CONFIG_NET=y
