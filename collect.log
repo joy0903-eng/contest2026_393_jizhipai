@@ -1,0 +1,331 @@
+== Collect: cwd = /home/runner/work/contest2026_393_jizhipai/contest2026_393_jizhipai/openvela ==
+== Collect: staging dir ==
+total 8
+drwxr-xr-x  2 runner runner 4096 Oct 24 06:13 .
+drwxr-xr-x 16 runner runner 4096 Oct 24 06:13 ..
+== Collect: binlist ==
+-rw-r--r-- 1 runner runner 0 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/mbedtls/mbedtls/tests/data_files/pkcs7_zerolendata.bin
+-rw-r--r-- 1 runner runner 489 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/mbedtls/mbedtls/tests/data_files/base64/def_b64_ff.bin
+-rw-r--r-- 1 runner runner 7 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/mbedtls/mbedtls/tests/data_files/pkcs7_data.bin
+-rw-r--r-- 1 runner runner 3 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/mbedtls/mbedtls/tests/data_files/pkcs7_data_1.bin
+-rw-r--r-- 1 runner runner 1072 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/esp_phy/esp32c3/phy_multiple_init_data.bin
+-rw-r--r-- 1 runner runner 1072 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/esp_phy/esp32s3/phy_multiple_init_data.bin
+-rw-r--r-- 1 runner runner 1072 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/esp_phy/esp32c6/phy_multiple_init_data.bin
+-rw-r--r-- 1 runner runner 1072 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/esp_phy/esp32s2/phy_multiple_init_data.bin
+-rw-r--r-- 1 runner runner 1072 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/esp_phy/esp32/phy_multiple_init_data.bin
+-rw-r--r-- 1 runner runner 1072 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/esp_phy/esp32c2/phy_multiple_init_data.bin
+-rw-r--r-- 1 runner runner 966352 Oct 24 06:13 nuttx/nuttx.bin
+-rw-r--r-- 1 runner runner 52 Oct 24 06:11 nuttx/libs/libc/fdt/dtc/tests/incbin.bin
+total 108
+drwxr-xr-x 2 runner runner  4096 Oct 24 06:11 .
+drwxr-xr-x 6 runner runner  4096 Oct 24 06:11 ..
+-rw-r--r-- 1 runner runner   798 Oct 24 06:11 assign.pass.cpp
+-rw-r--r-- 1 runner runner   757 Oct 24 06:11 copy.pass.cpp
+-rw-r--r-- 1 runner runner  1648 Oct 24 06:11 ctor_int_double.pass.cpp
+-rw-r--r-- 1 runner runner   812 Oct 24 06:11 ctor_param.pass.cpp
+-rw-r--r-- 1 runner runner  1155 Oct 24 06:11 eq.pass.cpp
+-rw-r--r-- 1 runner runner 11249 Oct 24 06:11 eval.PR44847.pass.cpp
+-rw-r--r-- 1 runner runner 15492 Oct 24 06:11 eval.pass.cpp
+-rw-r--r-- 1 runner runner  5141 Oct 24 06:11 eval_param.pass.cpp
+-rw-r--r-- 1 runner runner   755 Oct 24 06:11 get_param.pass.cpp
+-rw-r--r-- 1 runner runner  1178 Oct 24 06:11 io.pass.cpp
+-rw-r--r-- 1 runner runner   702 Oct 24 06:11 max.pass.cpp
+-rw-r--r-- 1 runner runner   701 Oct 24 06:11 min.pass.cpp
+-rw-r--r-- 1 runner runner   837 Oct 24 06:11 param_assign.pass.cpp
+-rw-r--r-- 1 runner runner   832 Oct 24 06:11 param_copy.pass.cpp
+-rw-r--r-- 1 runner runner  1173 Oct 24 06:11 param_ctor.pass.cpp
+-rw-r--r-- 1 runner runner   993 Oct 24 06:11 param_eq.pass.cpp
+-rw-r--r-- 1 runner runner   835 Oct 24 06:11 param_types.pass.cpp
+-rw-r--r-- 1 runner runner   792 Oct 24 06:11 set_param.pass.cpp
+-rw-r--r-- 1 runner runner   953 Oct 24 06:11 types.pass.cpp
+total 12
+drwxr-xr-x 2 runner runner 4096 Oct 24 06:11 .
+drwxr-xr-x 6 runner runner 4096 Oct 24 06:11 ..
+-rw-r--r-- 1 runner runner  844 Oct 24 06:11 bad_engine.verify.cpp
+sts/data_files/pkcs7_zerolendata.bin
+-rw-r--r-- 1 runner runner 489 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/mbedtls/mbedtls/tests/data_files/base64/def_b64_ff.bin
+-rw-r--r-- 1 runner runner 7 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/mbedtls/mbedtls/tests/data_files/pkcs7_data.bin
+-rw-r--r-- 1 runner runner 3 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/mbedtls/mbedtls/tests/data_files/pkcs7_data_1.bin
+-rw-r--r-- 1 runner runner 1072 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/esp_phy/esp32c3/phy_multiple_init_data.bin
+-rw-r--r-- 1 runner runner 1072 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/esp_phy/esp32s3/phy_multiple_init_data.bin
+-rw-r--r-- 1 runner runner 1072 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/esp_phy/esp32c6/phy_multiple_init_data.bin
+-rw-r--r-- 1 runner runner 1072 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/esp_phy/esp32s2/phy_multiple_init_data.bin
+-rw-r--r-- 1 runner runner 1072 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/esp_phy/esp32/phy_multiple_init_data.bin
+-rw-r--r-- 1 runner runner 1072 Oct 24 06:12 nuttx/arch/xtensa/src/esp32s3/esp-hal-3rdparty/components/esp_phy/esp32c2/phy_multiple_init_data.bin
+-rw-r--r-- 1 runner runner 966352 Oct 24 06:13 nuttx/nuttx.bin
+-rw-r--r-- 1 runner runner 52 Oct 24 06:11 nuttx/libs/libc/fdt/dtc/tests/incbin.bin
+total 108
+drwxr-xr-x 2 runner runner  4096 Oct 24 06:11 .
+drwxr-xr-x 6 runner runner  4096 Oct 24 06:11 ..
+-rw-r--r-- 1 runner runner   798 Oct 24 06:11 assign.pass.cpp
+-rw-r--r-- 1 runner runner   757 Oct 24 06:11 copy.pass.cpp
+-rw-r--r-- 1 runner runner  1648 Oct 24 06:11 ctor_int_double.pass.cpp
+-rw-r--r-- 1 runner runner   812 Oct 24 06:11 ctor_param.pass.cpp
+-rw-r--r-- 1 runner runner  1155 Oct 24 06:11 eq.pass.cpp
+-rw-r--r-- 1 runner runner 11249 Oct 24 06:11 eval.PR44847.pass.cpp
+-rw-r--r-- 1 runner runner 15492 Oct 24 06:11 eval.pass.cpp
+-rw-r--r-- 1 runner runner  5141 Oct 24 06:11 eval_param.pass.cpp
+-rw-r--r-- 1 runner runner   755 Oct 24 06:11 get_param.pass.cpp
+-rw-r--r-- 1 runner runner  1178 Oct 24 06:11 io.pass.cpp
+-rw-r--r-- 1 runner runner   702 Oct 24 06:11 max.pass.cpp
+-rw-r--r-- 1 runner runner   701 Oct 24 06:11 min.pass.cpp
+-rw-r--r-- 1 runner runner   837 Oct 24 06:11 param_assign.pass.cpp
+-rw-r--r-- 1 runner runner   832 Oct 24 06:11 param_copy.pass.cpp
+-rw-r--r-- 1 runner runner  1173 Oct 24 06:11 param_ctor.pass.cpp
+-rw-r--r-- 1 runner runner   993 Oct 24 06:11 param_eq.pass.cpp
+-rw-r--r-- 1 runner runner   835 Oct 24 06:11 param_types.pass.cpp
+-rw-r--r-- 1 runner runner   792 Oct 24 06:11 set_param.pass.cpp
+-rw-r--r-- 1 runner runner   953 Oct 24 06:11 types.pass.cpp
+total 12
+drwxr-xr-x 2 runner runner 4096 Oct 24 06:11 .
+drwxr-xr-x 6 runner runner 4096 Oct 24 06:11 ..
+-rw-r--r-- 1 runner runner  844 Oct 24 06:11 bad_engine.verify.cpp
+'nuttx/nuttx.bin' -> 'firmware/nuttx.bin'
+== Collect: ELF ==
+-rwxr-xr-x 1 runner runner 1425868 Oct 24 06:13 nuttx/nuttx
+cp: -r not specified; omitting directory 'nuttx'
+'nuttx/nuttx' -> 'firmware/nuttx'
+== Collect: map files (any *.map under nuttx/) ==
+-rw-r--r-- 1 runner runner 11107388 Oct 24 06:13 nuttx/nuttx.map
+-rw-r--r-- 1 runner runner 275153 Oct 24 06:13 nuttx/System.map
+total 208
+drwxr-xr-x 6 runner runner  4096 Oct 24 06:11 .
+drwxr-xr-x 6 runner runner  4096 Oct 24 06:11 ..
+-rw-r--r-- 1 runner runner   716 Oct 24 06:11 allocator_mismatch.verify.cpp
+-rw-r--r-- 1 runner runner  1972 Oct 24 06:11 bucket.pass.cpp
+-rw-r--r-- 1 runner runner  2233 Oct 24 06:11 bucket_count.pass.cpp
+-rw-r--r-- 1 runner runner  2180 Oct 24 06:11 bucket_size.pass.cpp
+-rw-r--r-- 1 runner runner  1275 Oct 24 06:11 compare.pass.cpp
+-rw-r--r-- 1 runner runner  2120 Oct 24 06:11 contains.pass.cpp
+-rw-r--r-- 1 runner runner  2355 Oct 24 06:11 contains.transparent.pass.cpp
+-rw-r--r-- 1 runner runner  1919 Oct 24 06:11 count.pass.cpp
+-rw-r--r-- 1 runner runner  2328 Oct 24 06:11 count.transparent.pass.cpp
+-rw-r--r-- 1 runner runner  1150 Oct 24 06:11 empty.pass.cpp
+-rw-r--r-- 1 runner runner   675 Oct 24 06:11 empty.verify.cpp
+-rw-r--r-- 1 runner runner  6039 Oct 24 06:11 eq.pass.cpp
+-rw-r--r-- 1 runner runner  2403 Oct 24 06:11 equal_range.transparent.pass.cpp
+-rw-r--r-- 1 runner runner  2432 Oct 24 06:11 equal_range_const.pass.cpp
+-rw-r--r-- 1 runner runner  2390 Oct 24 06:11 equal_range_non_const.pass.cpp
+-rw-r--r-- 1 runner runner  2637 Oct 24 06:11 erase_if.pass.cpp
+-rw-r--r-- 1 runner runner  2310 Oct 24 06:11 find.transparent.pass.cpp
+-rw-r--r-- 1 runner runner  2123 Oct 24 06:11 find_const.pass.cpp
+-rw-r--r-- 1 runner runner  2085 Oct 24 06:11 find_non_const.pass.cpp
+-rw-r--r-- 1 runner runner  1132 Oct 24 06:11 get_allocator.pass.cpp
+-rw-r--r-- 1 runner runner   976 Oct 24 06:11 incomplete_type.pass.cpp
+-rw-r--r-- 1 runner runner  1505 Oct 24 06:11 iterator.operators.addressof.compile.pass.cpp
+-rw-r--r-- 1 runner runner  4396 Oct 24 06:11 iterator_concept_conformance.compile.pass.cpp
+-rw-r--r-- 1 runner runner  4310 Oct 24 06:11 iterators.pass.cpp
+-rw-r--r-- 1 runner runner  2354 Oct 24 06:11 load_factor.pass.cpp
+-rw-r--r-- 1 runner runner 11876 Oct 24 06:11 local_iterators.pass.cpp
+-rw-r--r-- 1 runner runner  1165 Oct 24 06:11 max_bucket_count.pass.cpp
+-rw-r--r-- 1 runner runner  1710 Oct 24 06:11 max_load_factor.pass.cpp
+-rw-r--r-- 1 runner runner  1552 Oct 24 06:11 max_size.pass.cpp
+-rw-r--r-- 1 runner runner  1493 Oct 24 06:11 range_concept_conformance.compile.pass.cpp
+-rw-r--r-- 1 runner runner  2859 Oct 24 06:11 rehash.pass.cpp
+-rw-r--r-- 1 runner runner  2852 Oct 24 06:11 reserve.pass.cpp
+-rw-r--r-- 1 runner runner  1652 Oct 24 06:11 size.pass.cpp
+-rw-r--r-- 1 runner runner 22532 Oct 24 06:11 swap_member.pass.cpp
+-rw-r--r-- 1 runner runner  4248 Oct 24 06:11 types.pass.cpp
+drwxr-xr-x 2 runner runner  4096 Oct 24 06:11 unord.map.cnstr
+drwxr-xr-x 2 runner runner  4096 Oct 24 06:11 unord.map.elem
+drwxr-xr-x 2 runner runner  4096 Oct 24 06:11 unord.map.modifiers
+drwxr-xr-x 2 runner runner  4096 Oct 24 06:11 unord.map.swap
+total 60
+drwxr-xr-x 3 runner runner 4096 Oct 24 06:11 .
+drwxr-xr-x 6 runner runner 4096 Oct 24 06:11 ..
+-rw-r--r-- 1 runner runner  902 Oct 24 06:11 assert.bucket.pass.cpp
+-rw-r--r-- 1 runner runner 1073 Oct 24 06:11 assert.bucket_size.pass.cpp
+-rw-r--r-- 1 runner runner 1096 Oct 24 06:11 assert.max_load_factor.pass.cpp
+-rw-r--r-- 1 runner runner  875 Oct 24 06:11 at.abort.pass.cpp
+-rw-r--r-- 1 runner runner  893 Oct 24 06:11 at.const.abort.pass.cpp
+-rw-r--r-- 1 runner runner 1215 Oct 24 06:11 debug.insert.hint_const_lvalue.pass.cpp
+-rw-r--r-- 1 runner runner 1088 Oct 24 06:11 debug.insert.hint_rvalue.pass.cpp
+-rw-r--r-- 1 runner runner 1349 Oct 24 06:11 debug.iterator.dereference.pass.cpp
+-rw-r--r-- 1 runner runner 1439 Oct 24 06:11 debug.iterator.increment.pass.cpp
+-rw-r--r-- 1 runner runner 1293 Oct 24 06:11 debug.local_iterator.dereference.pass.cpp
+-rw-r--r-- 1 runner runner 1601 Oct 24 06:11 debug.local_iterator.increment.pass.cpp
+-rw-r--r-- 1 runner runner 1431 Oct 24 06:11 debug.swap.pass.cpp
+drwxr-xr-x 2 runner runner 4096 Oct 24 06:11 unord.map.modifiers
+'nuttx/nuttx.map' -> 'firmware/nuttx.map'
+'nuttx/System.map' -> 'firmware/System.map'
+== Collect: nuttx.manifest (the build's own artifact list) ==
+-rw-r--r-- 1 runner runner 37 Oct 24 06:13 nuttx/nuttx.manifest
+nuttx
+System.map
+nuttx.map
+nuttx.bin
+'binlist.txt' -> 'firmware/binlist.txt'
+== Collect: SEGMENT TABLE (bootability gate) ==
+== esptool image_info (rc=0) ==
+esptool.py v4.8.1
+File size: 966352 (bytes)
+Image version: 1
+Entry point: 40380ac4
+7 segments
+
+Segment 1: len 0x0307c load 0x3fcbc840 file_offs 0x00000018 [BYTE_ACCESSIBLE,MEM_INTERNAL,DRAM]
+Segment 2: len 0x00400 load 0x40374000 file_offs 0x0000309c [MEM_INTERNAL,IRAM]
+Segment 3: len 0x0b928 load 0x40380000 file_offs 0x000034a4 [MEM_INTERNAL,IRAM]
+Segment 4: len 0x0121c load 0x00000000 file_offs 0x0000edd4 [PADDING]
+Segment 5: len 0x21240 load 0x3c010000 file_offs 0x0000fff8 [DROM]
+Segment 6: len 0x0edb0 load 0x00000000 file_offs 0x00031240 [PADDING]
+Segment 7: len 0xabea0 load 0x42050000 file_offs 0x0003fff8 [IROM]
+Checksum: ad (valid)
+Validation Hash: d2f26ecf098e3140e39c4dbf87a7ee0c68a7c21ba42053bc09067f623e9a386f (valid)
+esptool_rc=0 irom=1 drom=1 validation_hash=1 (need >=1 each)
+== ZERO-ADDR GATE: python3 /tmp/segcheck.py nuttx/nuttx.bin (rc=1) ==
+------------------------------------------------------------------------------
+== ESP IMAGE SEGMENT TABLE: nuttx/nuttx.bin ==
+   file size    : 966352 bytes
+   magic        : 0xe9 (ok)
+   segcount     : 7
+   entry point  : 0x40380ac4
+   first seg hdr: 0x18  (24-byte image header)
+   last byte of last segment data: 0xebea0
+
+   idx  load_addr    data_len   hdr_off    data_off   note
+   0    0x3fcbc840   0x307c     0x18       0x20       -
+   1    0x40374000   0x400      0x309c     0x30a4     -
+   2    0x40380000   0xb928     0x34a4     0x34ac     -
+   3    0x00000000   0x121c     0xedd4     0xeddc     ZERO LOAD ADDR -- ROM FAULTS HERE
+   4    0x3c010000   0x21240    0xfff8     0x10000    -
+   5    0x00000000   0xedb0     0x31240    0x31248    ZERO LOAD ADDR -- ROM FAULTS HERE
+   6    0x42050000   0xabea0    0x3fff8    0x40000    -
+
+   seg3 load_addr=0x00000000 data_len=0x121c -- this is the segment the ROM tries to copy to address 0.
+   payload[0:16]: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 | all 4636 payload bytes are 0x00
+
+   seg5 load_addr=0x00000000 data_len=0xedb0 -- this is the segment the ROM tries to copy to address 0.
+   payload[0:16]: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 | all 60848 payload bytes are 0x00
+
+SEGCOUNT=7
+ZERO_LOAD_ADDR_SEGMENTS=2
+== ZERO-ADDR GATE FAIL: 2 segment(s) with load address 0 (indexes: 3, 5) ==
+   A segment with load address 0 is NOT harmless padding on this
+   board.  nuttx/arch/xtensa/src/common/espressif/esp_loader.c:65
+   ('#define IS_PADD(addr) (addr == 0)') is NuttX's own SECONDARY
+   loader, not the chip ROM.  This image is built with
+   CONFIG_ESPRESSIF_SIMPLE_BOOT=y, so there is no second-stage
+   bootloader: ESP-ROM:esp32s3-20210327 parses nuttx.bin itself, it
+   does NOT skip a zero-address segment, it copies data_len bytes to
+   address 0 and takes a StoreProhibited fault
+   (Guru Meditation Error ... StoreProhibited, EXCVADDR:
+   0x00000000), then reboots forever on TG0WDT_SYS_RST.
+   run#68/#69 (787632 bytes, md5 71e92552cc0fe0f73a3147a6cca5a8ae)
+   HAVE [IROM], [DROM] and a VALID Validation Hash and still brick
+   for exactly this reason, which is why the IROM/DROM/hash gate
+   alone is not sufficient.  esptool labels these segments
+   [PADDING] purely because its per-chip table maps
+   0x00000000-0x00010000 to 'PADDING'
+   (esptool/targets/esp32s3.py MEMORY_MAP) -- that is esptool's
+   classification, not a promise from the ROM.
+   Origin: esptool elf2image MMU-page (64 KB) alignment padding,
+   esptool/bin_image.py save(): pad_segment = ImageSegment(0, ...).
+   Full segment table printed above.
+------------------------------------------------------------------------------
+zeroaddr_rc=1 segcount=7 zero_load_addr_segments=2 (need rc=0, segcount>=3 and 0 zero segments)
+== BOOTABILITY GATE FAILED: image not provably bootable ==
+   esptool_rc=0 irom=1 drom=1 validation_hash=1 zeroaddr_rc=1 segcount=7 zero_load_addr_segments=2.
+   A bootable image needs >=1 [IROM], >=1 [DROM] and a
+   'Validation Hash: ... (valid)' line (esptool's own per-chip
+   segment classification -- do NOT hand-write address windows).
+   Missing IROM/DROM or a missing Validation Hash is the
+   --ram-only-header fingerprint (run#55/67: 2 all-RAM segments,
+   valid Checksum but NO Validation Hash, 0 serial bytes,
+   verified on hardware 2026-09-17).
+   Usual cause: --ram-only-header still present in
+   nuttx/tools/esp32s3/Config.mk because the nuttx patch loop
+   did not run.  See BSP SECTION 2/3 in bsp.log.
+   ZERO-ADDR GATE FAILED (rc=1, segcount=7,
+   zero_load_addr_segments=2): a segment has load
+   address 0 and THE ROM WILL FAULT ON IT -- StoreProhibited,
+   EXCVADDR 0x00000000, then endless TG0WDT_SYS_RST reboots.
+   esp_loader.c's IS_PADD() is NuttX's own secondary loader;
+   SIMPLE_BOOT has none, so ESP-ROM:esp32s3-20210327 parses
+   this image itself and does NOT skip the segment.  esptool's
+   [PADDING] label is just its 0x00000000-0x00010000 MEMORY_MAP
+   entry.  Origin: esptool elf2image 64 KB MMU-page alignment
+   padding (esptool/bin_image.py save(): pad_segment =
+   ImageSegment(0, ...)) -- not merge_bin, not the linker.
+   NOT a hard failure here on purpose -- the verdict step decides,
+   so Collect still stages the binary for inspection.
+   --- full ESP segment table follows ---
+------------------------------------------------------------------------------
+== ESP IMAGE SEGMENT TABLE: nuttx/nuttx.bin ==
+   file size    : 966352 bytes
+   magic        : 0xe9 (ok)
+   segcount     : 7
+   entry point  : 0x40380ac4
+   first seg hdr: 0x18  (24-byte image header)
+   last byte of last segment data: 0xebea0
+
+   idx  load_addr    data_len   hdr_off    data_off   note
+   0    0x3fcbc840   0x307c     0x18       0x20       -
+   1    0x40374000   0x400      0x309c     0x30a4     -
+   2    0x40380000   0xb928     0x34a4     0x34ac     -
+   3    0x00000000   0x121c     0xedd4     0xeddc     ZERO LOAD ADDR -- ROM FAULTS HERE
+   4    0x3c010000   0x21240    0xfff8     0x10000    -
+   5    0x00000000   0xedb0     0x31240    0x31248    ZERO LOAD ADDR -- ROM FAULTS HERE
+   6    0x42050000   0xabea0    0x3fff8    0x40000    -
+
+   seg3 load_addr=0x00000000 data_len=0x121c -- this is the segment the ROM tries to copy to address 0.
+   payload[0:16]: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 | all 4636 payload bytes are 0x00
+
+   seg5 load_addr=0x00000000 data_len=0xedb0 -- this is the segment the ROM tries to copy to address 0.
+   payload[0:16]: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 | all 60848 payload bytes are 0x00
+
+SEGCOUNT=7
+ZERO_LOAD_ADDR_SEGMENTS=2
+== ZERO-ADDR GATE FAIL: 2 segment(s) with load address 0 (indexes: 3, 5) ==
+   A segment with load address 0 is NOT harmless padding on this
+   board.  nuttx/arch/xtensa/src/common/espressif/esp_loader.c:65
+   ('#define IS_PADD(addr) (addr == 0)') is NuttX's own SECONDARY
+   loader, not the chip ROM.  This image is built with
+   CONFIG_ESPRESSIF_SIMPLE_BOOT=y, so there is no second-stage
+   bootloader: ESP-ROM:esp32s3-20210327 parses nuttx.bin itself, it
+   does NOT skip a zero-address segment, it copies data_len bytes to
+   address 0 and takes a StoreProhibited fault
+   (Guru Meditation Error ... StoreProhibited, EXCVADDR:
+   0x00000000), then reboots forever on TG0WDT_SYS_RST.
+   run#68/#69 (787632 bytes, md5 71e92552cc0fe0f73a3147a6cca5a8ae)
+   HAVE [IROM], [DROM] and a VALID Validation Hash and still brick
+   for exactly this reason, which is why the IROM/DROM/hash gate
+   alone is not sufficient.  esptool labels these segments
+   [PADDING] purely because its per-chip table maps
+   0x00000000-0x00010000 to 'PADDING'
+   (esptool/targets/esp32s3.py MEMORY_MAP) -- that is esptool's
+   classification, not a promise from the ROM.
+   Origin: esptool elf2image MMU-page (64 KB) alignment padding,
+   esptool/bin_image.py save(): pad_segment = ImageSegment(0, ...).
+   Full segment table printed above.
+------------------------------------------------------------------------------
+   --- esptool image_info output follows ---
+esptool.py v4.8.1
+File size: 966352 (bytes)
+Image version: 1
+Entry point: 40380ac4
+7 segments
+
+Segment 1: len 0x0307c load 0x3fcbc840 file_offs 0x00000018 [BYTE_ACCESSIBLE,MEM_INTERNAL,DRAM]
+Segment 2: len 0x00400 load 0x40374000 file_offs 0x0000309c [MEM_INTERNAL,IRAM]
+Segment 3: len 0x0b928 load 0x40380000 file_offs 0x000034a4 [MEM_INTERNAL,IRAM]
+Segment 4: len 0x0121c load 0x00000000 file_offs 0x0000edd4 [PADDING]
+Segment 5: len 0x21240 load 0x3c010000 file_offs 0x0000fff8 [DROM]
+Segment 6: len 0x0edb0 load 0x00000000 file_offs 0x00031240 [PADDING]
+Segment 7: len 0xabea0 load 0x42050000 file_offs 0x0003fff8 [IROM]
+Checksum: ad (valid)
+Validation Hash: d2f26ecf098e3140e39c4dbf87a7ee0c68a7c21ba42053bc09067f623e9a386f (valid)
+'segcount.txt' -> 'firmware/segcount.txt'
+== Collect: firmware/ contents ==
+total 13796
+drwxr-xr-x  2 runner runner     4096 Oct 24 06:13 .
+drwxr-xr-x 16 runner runner     4096 Oct 24 06:13 ..
+-rw-r--r--  1 runner runner   275153 Oct 24 06:13 System.map
+-rw-r--r--  1 runner runner     3118 Oct 24 06:13 binlist.txt
+-rw-r--r--  1 runner runner   422173 Oct 24 06:13 build_tail.log
+-rwxr-xr-x  1 runner runner  1425868 Oct 24 06:13 nuttx
+-rw-r--r--  1 runner runner   966352 Oct 24 06:13 nuttx.bin
+-rw-r--r--  1 runner runner       82 Oct 24 06:13 nuttx.bin.sha256
+-rw-r--r--  1 runner runner 11107388 Oct 24 06:13 nuttx.map
+-rw-r--r--  1 runner runner     3546 Oct 24 06:13 segcount.txt
+== Collect: DONE ==

@@ -1,0 +1,72 @@
+esptool_rc=0
+irom=1
+drom=1
+validation_hash=1
+zeroaddr_rc=1
+segcount=7
+zero_load_addr_segments=2
+esptool.py v4.8.1
+File size: 966352 (bytes)
+Image version: 1
+Entry point: 40380ac4
+7 segments
+
+Segment 1: len 0x0307c load 0x3fcbc840 file_offs 0x00000018 [BYTE_ACCESSIBLE,MEM_INTERNAL,DRAM]
+Segment 2: len 0x00400 load 0x40374000 file_offs 0x0000309c [MEM_INTERNAL,IRAM]
+Segment 3: len 0x0b928 load 0x40380000 file_offs 0x000034a4 [MEM_INTERNAL,IRAM]
+Segment 4: len 0x0121c load 0x00000000 file_offs 0x0000edd4 [PADDING]
+Segment 5: len 0x21240 load 0x3c010000 file_offs 0x0000fff8 [DROM]
+Segment 6: len 0x0edb0 load 0x00000000 file_offs 0x00031240 [PADDING]
+Segment 7: len 0xabea0 load 0x42050000 file_offs 0x0003fff8 [IROM]
+Checksum: ad (valid)
+Validation Hash: d2f26ecf098e3140e39c4dbf87a7ee0c68a7c21ba42053bc09067f623e9a386f (valid)
+== full ESP segment table ==
+------------------------------------------------------------------------------
+== ESP IMAGE SEGMENT TABLE: nuttx/nuttx.bin ==
+   file size    : 966352 bytes
+   magic        : 0xe9 (ok)
+   segcount     : 7
+   entry point  : 0x40380ac4
+   first seg hdr: 0x18  (24-byte image header)
+   last byte of last segment data: 0xebea0
+
+   idx  load_addr    data_len   hdr_off    data_off   note
+   0    0x3fcbc840   0x307c     0x18       0x20       -
+   1    0x40374000   0x400      0x309c     0x30a4     -
+   2    0x40380000   0xb928     0x34a4     0x34ac     -
+   3    0x00000000   0x121c     0xedd4     0xeddc     ZERO LOAD ADDR -- ROM FAULTS HERE
+   4    0x3c010000   0x21240    0xfff8     0x10000    -
+   5    0x00000000   0xedb0     0x31240    0x31248    ZERO LOAD ADDR -- ROM FAULTS HERE
+   6    0x42050000   0xabea0    0x3fff8    0x40000    -
+
+   seg3 load_addr=0x00000000 data_len=0x121c -- this is the segment the ROM tries to copy to address 0.
+   payload[0:16]: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 | all 4636 payload bytes are 0x00
+
+   seg5 load_addr=0x00000000 data_len=0xedb0 -- this is the segment the ROM tries to copy to address 0.
+   payload[0:16]: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 | all 60848 payload bytes are 0x00
+
+SEGCOUNT=7
+ZERO_LOAD_ADDR_SEGMENTS=2
+== ZERO-ADDR GATE FAIL: 2 segment(s) with load address 0 (indexes: 3, 5) ==
+   A segment with load address 0 is NOT harmless padding on this
+   board.  nuttx/arch/xtensa/src/common/espressif/esp_loader.c:65
+   ('#define IS_PADD(addr) (addr == 0)') is NuttX's own SECONDARY
+   loader, not the chip ROM.  This image is built with
+   CONFIG_ESPRESSIF_SIMPLE_BOOT=y, so there is no second-stage
+   bootloader: ESP-ROM:esp32s3-20210327 parses nuttx.bin itself, it
+   does NOT skip a zero-address segment, it copies data_len bytes to
+   address 0 and takes a StoreProhibited fault
+   (Guru Meditation Error ... StoreProhibited, EXCVADDR:
+   0x00000000), then reboots forever on TG0WDT_SYS_RST.
+   run#68/#69 (787632 bytes, md5 71e92552cc0fe0f73a3147a6cca5a8ae)
+   HAVE [IROM], [DROM] and a VALID Validation Hash and still brick
+   for exactly this reason, which is why the IROM/DROM/hash gate
+   alone is not sufficient.  esptool labels these segments
+   [PADDING] purely because its per-chip table maps
+   0x00000000-0x00010000 to 'PADDING'
+   (esptool/targets/esp32s3.py MEMORY_MAP) -- that is esptool's
+   classification, not a promise from the ROM.
+   Origin: esptool elf2image MMU-page (64 KB) alignment padding,
+   esptool/bin_image.py save(): pad_segment = ImageSegment(0, ...).
+   Full segment table printed above.
+------------------------------------------------------------------------------
