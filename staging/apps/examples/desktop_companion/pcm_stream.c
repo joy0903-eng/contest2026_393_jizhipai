@@ -442,6 +442,10 @@ int pcm_stream_open(struct pcm_stream *s, int type)
       goto errout_mq;
     }
 
+  /* Allocate as many pipeline buffers as internal SRAM allows.  We stop at
+   * the first failure and KEEP what we already got (a tight SRAM build may
+   * not fit all PCM_STREAM_NBUFFERS) -- but a streaming pipeline needs at
+   * least 2 buffers to keep flowing, so fewer than that is a hard failure. */
   for (i = 0; i < PCM_STREAM_NBUFFERS; i++)
     {
       memset(&bufdesc, 0, sizeof(bufdesc));
@@ -452,20 +456,31 @@ int pcm_stream_open(struct pcm_stream *s, int type)
                     "AUDIOIOC_ALLOCBUFFER");
       if (ret < 0)
         {
-          goto errout_buffers;
+          syslog(LOG_WARNING,
+                 "pcm_stream: ALLOCBUFFER[%d] failed: %d (got %d/%d)\n",
+                 i, ret, s->nallocated, PCM_STREAM_NBUFFERS);
+          break;
         }
 
       if (s->apb[i] == NULL)
         {
-          syslog(LOG_ERR, "pcm_stream: ALLOCBUFFER returned no buffer\n");
-          ret = -ENOMEM;
-          goto errout_buffers;
+          syslog(LOG_WARNING,
+                 "pcm_stream: ALLOCBUFFER[%d] returned no buffer\n", i);
+          break;
         }
 
       s->apb[i]->curbyte = 0;
       s->apb[i]->nbytes  = s->apb[i]->nmaxbytes;
       s->apb[i]->flags   = 0;
       s->nallocated++;
+    }
+
+  if (s->nallocated < 2)
+    {
+      syslog(LOG_ERR, "pcm_stream: only %d buffers, need >=2\n",
+             s->nallocated);
+      ret = -ENOMEM;
+      goto errout_buffers;
     }
 
   s->opened = true;
