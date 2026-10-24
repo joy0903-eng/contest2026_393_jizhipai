@@ -282,7 +282,20 @@ if __name__=="__main__":
 SEGCHECK_PY
 cat > /tmp/patch_zero_segs.py <<'PATCH_ZERO_SEGS'
 import hashlib, struct, sys
-SCRATCH_BASE=0x3FC88000; SCRATCH_CEIL=0x3FCB0000
+# ESP32-S3: internal SRAM is dual-mapped.  DRAM 0x3FC88000 (data bus) and IRAM
+# 0x40370000 (instruction bus) are two views of the SAME physical memory, so
+#   iram_addr == dram_addr + DRAM2IRAM_ALIAS
+# Verified from the last known-good build: it carries real .data at DRAM
+# 0x3fc88000 (-> IRAM 0x40370000, the reserved window) while its IRAM code
+# lives at 0x40380000, and it boots.
+# Consequence: a relocated (formerly la=0) padding segment must clear BOTH the
+# loaded DRAM segments in the DRAM window AND the loaded IRAM segments in the
+# IRAM alias window, or it silently zeroes live code (-> IllegalInstruction).
+DRAM_BASE=0x3FC88000; IRAM_BASE=0x40370000
+DRAM2IRAM_ALIAS=0x6E8000
+MARGIN_ALIAS=0x2000     # keep the alias clear above the last IRAM byte
+MARGIN_DRAM=0x1000      # keep clear below the first DRAM byte
+ROM_STACK_GUARD=0x3FCE0000   # ROM stack lives ~0x3FCEBxxx
 def parse(path):
     data=bytearray(open(path,"rb").read())
     if len(data)<24 or data[0]!=0xE9: raise SystemExit("bad image")
@@ -293,32 +306,36 @@ def parse(path):
         if off+8+ln>len(data): raise SystemExit("seg %d data truncated"%i)
         entries.append((i,off,la,ln)); off+=8+ln
     return data,entries
+def is_dram(la): return DRAM_BASE<=la<0x3FCF0000
+def is_iram(la): return IRAM_BASE<=la<0x403E0000
 def main(src,dst):
-    data,entries=parse(src); scratch=SCRATCH_BASE; fixed=[]
-    # Dynamic scratch window: 0x3FC88000 up to (just below) the lowest REAL
-    # DRAM segment in this build.  fw127 proved 0x3FC88000 is valid app RAM
-    # (it carried real .data/.bss there and booted).  When the app's DRAM
-    # start drifts (dual-heap etc.), the window adapts instead of overflowing
-    # at the old fixed 32KB limit.  Never exceed SCRATCH_CEIL.
-    dram_las=[la for _,_,la,_ in entries if la!=0 and SCRATCH_BASE<=la<0x3FD00000]
-    limit=min((min(dram_las)-0x100) if dram_las else SCRATCH_CEIL, SCRATCH_CEIL)
-    print("scratch window 0x%08x..0x%08x"%(SCRATCH_BASE,limit))
-    for i,off,la,ln in entries:
-        if la!=0: continue
+    data,entries=parse(src)
+    real=[r for r in entries if r[2]!=0]
+    pads =[r for r in entries if r[2]==0]
+    iram_max=max([r[2]+r[3] for r in real if is_iram(r[2])] or [IRAM_BASE])
+    dram_min=min([r[2]      for r in real if is_dram(r[2])] or [0x3FCF0000])
+    # highest DRAM-space address whose IRAM alias is still BELOW iram_max
+    clash_ceil = iram_max - DRAM2IRAM_ALIAS + MARGIN_ALIAS
+    ceil  = min(dram_min - MARGIN_DRAM, ROM_STACK_GUARD - MARGIN_DRAM)
+    total = sum(r[3] for r in pads)
+    start = ceil - total
+    print("iram_max=0x%08x dram_min=0x%08x total_pad=0x%x"%(iram_max,dram_min,total))
+    print("window: start 0x%08x end 0x%08x (must be >= 0x%08x)"%(start,ceil,clash_ceil))
+    scratch=start
+    if pads and start < clash_ceil:
+        raise SystemExit("no safe scratch window: start 0x%x < 0x%x (would clobber IRAM code via alias)"%(start,clash_ceil))
+    for i,off,la,ln in pads:
         payload=data[off+8:off+8+ln]
         if any(payload): raise SystemExit("seg%d la=0 not zeros"%i)
-        if scratch+ln>limit:
-            raise SystemExit("scratch overflow: need end 0x%x > limit 0x%x"%(scratch+ln,limit))
-        struct.pack_into("<I",data,off,scratch); fixed.append((i,ln,scratch)); scratch+=ln
-    if not fixed: print("no zero-laddr segments")
-    else:
-        for i,ln,addr in fixed: print("  seg%d 0x0->0x%08x len=0x%x"%(i,addr,ln))
+        struct.pack_into("<I",data,off,scratch)
+        print("  seg%d 0x0->0x%08x len=0x%x (iram alias 0x%08x)"%(i,scratch,ln,scratch+DRAM2IRAM_ALIAS))
+        scratch+=ln
     if data[23]&1:
         if len(data)<56: raise SystemExit("too small for digest")
         doff=len(data)-32; data[doff:]=hashlib.sha256(bytes(data[:doff])).digest()
         print("  sha256 refreshed")
     open(dst,"wb").write(bytes(data))
-    d2,e2=parse(dst); bad=sum(1 for _,_,la,_ in e2 if la==0)
+    d2,e2=parse(dst); bad=sum(1 for r in e2 if r[2]==0)
     print("verify segcount=%d zero=%d"%(len(e2),bad)); return 0 if bad==0 else 1
 if __name__=="__main__":
     if len(sys.argv)!=3: sys.exit(2)
