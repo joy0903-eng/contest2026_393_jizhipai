@@ -1,0 +1,63 @@
+FAILED at 2026-10-24T14:05:36Z
+commit: f318ba083416d5139386e1c30fed8b1a4807a13a
+--- tail of build_vox3.log ---
+== NUTTX PATCH: 0001-esp_loader-map_rom_segments-override-irom-drom-size.patch ==
+patching file arch/xtensa/src/common/espressif/esp_loader.c
+  applied: 0001-esp_loader-map_rom_segments-override-irom-drom-size.patch
+== NUTTX PATCH: 0002-esp32s3-Config.mk-drop-ram-only-header.patch ==
+patching file tools/esp32s3/Config.mk
+  applied: 0002-esp32s3-Config.mk-drop-ram-only-header.patch
+== NUTTX PATCH: 0003-boot-heartbeat-probes.patch ==
+patching file arch/xtensa/src/esp32s3/esp32s3_start.c
+  applied: 0003-boot-heartbeat-probes.patch
+== NUTTX PATCH: 0005-esp32s3-iram-split-dcache-hole.patch ==
+patching file boards/xtensa/esp32s3/common/scripts/esp32s3_sections.ld
+patching file boards/xtensa/esp32s3/common/scripts/flat_memory.ld
+  applied: 0005-esp32s3-iram-split-dcache-hole.patch
+== NUTTX PATCH: 0006-kernel-app-entry-probes.patch ==
+patching file arch/xtensa/src/esp32s3/esp32s3_start.c
+Hunk #1 succeeded at 439 (offset 2 lines).
+  applied: 0006-kernel-app-entry-probes.patch
+== NUTTX PATCH: 0007-nx_start-trace-probes.patch ==
+patching file sched/init/nx_start.c
+patching file sched/init/nx_bringup.c
+  applied: 0007-nx_start-trace-probes.patch
+== NUTTX PATCH: 0008-kernel-up_initialize-probes.patch ==
+patching file arch/xtensa/src/common/xtensa_initialize.c
+  applied: 0008-kernel-up_initialize-probes.patch
+== NUTTX PATCH: 0009-irq-initialize-probes.patch ==
+patching file sched/irq/irq_initialize.c
+patching file arch/xtensa/src/esp32s3/esp32s3_irq.c
+patching file arch/xtensa/src/esp32s3/esp32s3_gpio.c
+patching file arch/xtensa/src/esp32s3/esp32s3_rtc_gpio.c
+  applied: 0009-irq-initialize-probes.patch
+== NUTTX PATCH: 0010-esp32s3-wifi-cpuint-fix.patch ==
+patching file arch/xtensa/src/esp32s3/esp32s3_irq.c
+  applied: 0010-esp32s3-wifi-cpuint-fix.patch
+== NUTTX PATCH: 0011-esp32s3-getcpuint-no-enable.patch ==
+patching file arch/xtensa/src/esp32s3/esp32s3_irq.c
+  applied: 0011-esp32s3-getcpuint-no-enable.patch
+== NUTTX PATCH: 0012-esp32s3-wifi-iram-alloc-retry.patch ==
+patching file arch/xtensa/src/esp32s3/esp32s3_wifi_adapter.c
+  applied: 0012-esp32s3-wifi-iram-alloc-retry.patch
+== NUTTX PATCH: 0013-esp32s3-wifi-init-alloc-trace.patch ==
+patching file arch/xtensa/src/esp32s3/esp32s3_wifi_adapter.c
+patching file arch/xtensa/src/esp32s3/esp32s3_wireless.c
+  applied: 0013-esp32s3-wifi-init-alloc-trace.patch
+== NUTTX PATCH: 0014-esp32s3-dual-heap-split-v636.patch ==
+patching file arch/xtensa/src/esp32s3/esp32s3_allocateheap.c
+  applied: 0014-esp32s3-dual-heap-split-v636.patch
+== NUTTX PATCH: 0015-esp32s3-i2s-v680-mono-rx-tdm.patch ==
+== NOT APPLICABLE: 0015-esp32s3-i2s-v680-mono-rx-tdm.patch ==
+can't find file to patch at input line 3
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|--- a/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c
+|+++ b/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+3 out of 3 hunks ignored
+== BSP FATAL: 1 patch(es) failed ==
