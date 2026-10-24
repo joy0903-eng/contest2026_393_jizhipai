@@ -69,11 +69,16 @@ extern "C"
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* Number of pipeline buffers.  CONFIG_ES8311_INFLIGHT defaults to 2, so 4
- * gives the driver one spare to chew on while we refill.
+/* Number of pipeline buffers.  CONFIG_ES8311_INFLIGHT defaults to 2; with 6
+ * we give the ES8311 driver more head-room to chew on while we refill.  This
+ * smooths out reap/refill and CPU-contention jitter (e.g. the LVGL SPI flush
+ * running on the same core) that would otherwise underrun the codec and make
+ * speech choppy ("卡卡的").  pcm_stream_open() tolerates PARTIAL allocation
+ * (it only requires >= 2 buffers) so a tight internal-SRAM build degrades
+ * gracefully instead of losing audio entirely.
  */
 
-#define PCM_STREAM_NBUFFERS   4
+#define PCM_STREAM_NBUFFERS   6
 
 /* Bytes per pipeline buffer: 2048 B = 64 ms @ 16 kHz / 16-bit / mono. */
 

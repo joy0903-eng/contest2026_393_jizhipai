@@ -171,11 +171,18 @@ static bool g_flush_live = false;
 static void my_lcd_flush(lv_display_t *disp, const lv_area_t *area,
                          uint8_t *color_p)
 {
-  ets_printf("[FLUSH] enter live=%d cp=%p\n", g_flush_live, (void *)color_p);
+  static bool s_flush_logged = false;
+
+  if (!s_flush_logged)
+    {
+      s_flush_logged = true;
+      ets_printf("[FLUSH] enter live=%d cp=%p\n", g_flush_live,
+                 (void *)color_p);
+    }
+
   if (!g_flush_live)
     {
       lv_display_flush_ready(disp);
-      ets_printf("[FLUSH] gated return\n");
       return;
     }
 
@@ -219,18 +226,31 @@ static void my_lcd_flush(lv_display_t *disp, const lv_area_t *area,
       return;
     }
 
-  lcd->setpower(lcd, 0xff);   /* ensure the panel stays on */
+  /* FIX (stutter + screen-freeze root cause): removed the per-flush
+   *   lcd->setpower(lcd, 0xff)
+   * that used to run here.  Re-asserting DISPON on EVERY LVGL flush (which
+   * fires many times per second, each a partial band) generated needless SPI
+   * traffic and triggered "DISPON re-asserted" / "panel rail is not up yet"
+   * churn from the ST7789 driver, and could stall the flush (freezing the UI
+   * -- the clock stops advancing).  The panel is powered on ONCE at init
+   * (see ui_smoke_test / ai_vox3_lcd_initialize); if the system st7789 driver
+   * ever auto-sleeps the panel, that is fixed in nuttx/lcd/st7789.c, not here.
+   *
+   * Staging buffer: reuse ONE static RGB565 buffer instead of malloc()+free()
+   * on every flush.  The old malloc(240*20*2 ~= 9.6 KB) per flush churned the
+   * heap (PSRAM is disabled on this board, so it is internal SRAM) and, on
+   * allocation failure, fell back to a slow row-by-row path -- both could
+   * stall the UI thread and starve the audio DMA, causing choppy speech. */
+  static uint16_t s_stage[240 * 20] __attribute__((aligned(32)));
+  static uint16_t s_row[240]        __attribute__((aligned(32)));
 
-  /* One contiguous RGB565 buffer for the whole area (PARTIAL mode keeps h
-   * small -- a handful of rows -- so this is a few KB).  If it cannot be
-   * allocated (e.g. a surprise full-frame flush), fall back to row-by-row
-   * with a tiny per-row buffer.  lv_color_to_u16() converts from whatever
-   * LVGL's internal colour depth is to RGB565 -- correct for this panel. */
   lv_color_t *src = (lv_color_t *)color_p;
-  uint16_t *buf = (uint16_t *)malloc((size_t)w * (size_t)h * 2);
+  const int   stage_bytes = (int)sizeof(s_stage);   /* 240 * 20 * 2 */
 
-  if (buf != NULL)
+  if (w * h * 2 <= stage_bytes)
     {
+      uint16_t *buf = s_stage;
+
       for (int i = 0; i < w * h; i++)
         {
           buf[i] = lv_color_to_u16(src[i]);   /* -> RGB565 */
@@ -238,16 +258,12 @@ static void my_lcd_flush(lv_display_t *disp, const lv_area_t *area,
 
       s_pinfo.putarea(lcd, area->y1, area->y2, area->x1, area->x2,
                       (uint8_t *)buf, (fb_coord_t)(w * 2));
-      free(buf);
     }
   else
     {
-      uint16_t *row = (uint16_t *)malloc((size_t)w * 2);
-      if (row == NULL)
-        {
-          lv_display_flush_ready(disp);
-          return;
-        }
+      /* Unexpectedly large area (not normal PARTIAL mode): row-by-row with a
+       * static per-row buffer -- no heap allocation, so it can never fail. */
+      uint16_t *row = s_row;
 
       for (int y = 0; y < h; y++)
         {
@@ -259,8 +275,6 @@ static void my_lcd_flush(lv_display_t *disp, const lv_area_t *area,
           s_pinfo.putarea(lcd, area->y1 + y, area->y1 + y, area->x1,
                           area->x2, (uint8_t *)row, (fb_coord_t)(w * 2));
         }
-
-      free(row);
     }
 
   if (s_first)
