@@ -202,6 +202,17 @@ if ! grep -qx 'CONFIG_MM_KERNEL_HEAP=y' nuttx/.config; then
   echo 'CONFIG_MM_KERNEL_HEAP=y' >> nuttx/.config
   echo "[V636] injected CONFIG_MM_KERNEL_HEAP=y" >> build.log
 fi
+# [WIFI-12] Wi-Fi 缓冲瘦身。
+# Wi-Fi 的 DMA 缓冲必须是**内部** DRAM —— PSRAM 不能用于 DMA，所以
+# CONFIG_ESP32S3_SPIRAM_COMMON_HEAP=y 并入的 8MB 救不了它。实测内核堆
+# 只剩约 204KB 内部 DRAM，而默认的 32+32+10 个缓冲要 ~256KB 连续内部
+# DRAM，esp_wifi_init() 因此返回 -12（init_internal FAILED ret=257）。
+# 动态收发各减半、静态 RX 降到 6，需求降到约 130KB，落在可用窗口内。
+sed -i 's/^CONFIG_ESP32S3_WIFI_DYNAMIC_RXBUF_NUM=.*/CONFIG_ESP32S3_WIFI_DYNAMIC_RXBUF_NUM=16/' nuttx/.config
+sed -i 's/^CONFIG_ESP32S3_WIFI_DYNAMIC_TXBUF_NUM=.*/CONFIG_ESP32S3_WIFI_DYNAMIC_TXBUF_NUM=16/' nuttx/.config
+sed -i 's/^CONFIG_ESP32S3_WIFI_STATIC_RXBUF_NUM=.*/CONFIG_ESP32S3_WIFI_STATIC_RXBUF_NUM=6/' nuttx/.config
+sed -i 's/^CONFIG_ESP32S3_WIFI_RXBA_AMPDU_WZ=.*/CONFIG_ESP32S3_WIFI_RXBA_AMPDU_WZ=4/' nuttx/.config
+echo "[WIFI] buffers slimmed for the internal-DRAM budget: drx=16 dtx=16 srx=6 rxba=4" >> build.log
 # SIMPLE_BOOT 闸门：必须 ROM 直启，否则 ESP32-S3 rev0.2 被 2 级 bootloader 拒
 if grep -qE '^CONFIG_ESP32S3_APP_FORMAT_(LEGACY|MCUBOOT)=y' nuttx/.config; then
   echo "== AUDIT FAILED: APP_FORMAT selected -> SIMPLE_BOOT off ==" >> build.log; exit 1
