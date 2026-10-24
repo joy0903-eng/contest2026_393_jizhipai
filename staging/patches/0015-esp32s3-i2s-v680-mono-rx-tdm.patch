@@ -1,0 +1,58 @@
+--- a/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c
++++ b/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c
+@@ -213,6 +213,8 @@
+  * how the transmitter must be programmed, independent of which of the
+  * several reset sites in this file happens to run next. */
+ static int g_i2s_tx_mono;
++static int g_i2s_rx_mono = 1;   /* [V680] RX TDM mono flag, set by i2s_rxchannels */
++static int g_v680_logs;         /* [V680] limit the rx tdm ctrl log to 3 lines */
+ 
+ /* [V671] *** Light re-arm latch. ***
+  *
+@@ -2031,6 +2033,38 @@
+     g_v388_pre_spins = spins;
+   }
+ 
++  /* [V680] Force mono RX TDM before arming the receiver.
++   *
++   * The ES8311 capture lower-half only programs I2S_RXSAMPLERATE and never
++   * calls i2s_rxchannels(), so the RX TDM channel-enable written at configure
++   * time (I2S_RX_TDM_PDM_CHAN0_EN | I2S_RX_TDM_PDM_CHAN1_EN -- both slots)
++   * is what the receiver keeps.  With CHAN1 enabled but the codec sending
++   * mono (slot 0 only) the RX DMA never completes a frame: the descriptor
++   * OWNER bit stays set, no GDMA interrupt fires, and capture returns zero
++   * bytes ("no PCM data for batch ASR").  Mirror the V669 TX fix: keep the
++   * 2-slot frame (TOT_CHAN_NUM = 1) but enable only CHAN0.  Written here,
++   * order-independently, immediately before I2S_RX_START. */
++
++  {
++    uint32_t rxtdm = FIELD_TO_VALUE(I2S_RX_TDM_TOT_CHAN_NUM, 1) |
++                     I2S_RX_TDM_PDM_CHAN0_EN;
++
++    if (!g_i2s_rx_mono)
++      {
++        rxtdm |= I2S_RX_TDM_PDM_CHAN1_EN;
++      }
++
++    putreg32(rxtdm, I2S_RX_TDM_CTRL_REG(priv->config->port));
++
++    if (g_v680_logs < 3)
++      {
++        g_v680_logs++;
++        syslog(LOG_INFO, "[V680] rx tdm ctrl=0x%08x mono=%d\n",
++               (unsigned)getreg32(I2S_RX_TDM_CTRL_REG(priv->config->port)),
++               g_i2s_rx_mono);
++      }
++  }
++
+   modifyreg32(I2S_RX_CONF_REG(priv->config->port), 0, I2S_RX_START);
+ 
+   {
+@@ -4882,6 +4916,7 @@
+         }
+ 
+       priv->channels = channels;
++      g_i2s_rx_mono = (channels == 1) ? 1 : 0;
+       return OK;
+     }
+ 
