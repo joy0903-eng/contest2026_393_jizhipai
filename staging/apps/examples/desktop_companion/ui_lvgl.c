@@ -236,18 +236,40 @@ static void my_lcd_flush(lv_display_t *disp, const lv_area_t *area,
    * (see ui_smoke_test / ai_vox3_lcd_initialize); if the system st7789 driver
    * ever auto-sleeps the panel, that is fixed in nuttx/lcd/st7789.c, not here.
    *
-   * Staging buffer: reuse ONE static RGB565 buffer instead of malloc()+free()
-   * on every flush.  The old malloc(240*20*2 ~= 9.6 KB) per flush churned the
-   * heap (PSRAM is disabled on this board, so it is internal SRAM) and, on
-   * allocation failure, fell back to a slow row-by-row path -- both could
-   * stall the UI thread and starve the audio DMA, causing choppy speech. */
-  static uint16_t s_stage[240 * 20] __attribute__((aligned(32)));
-  static uint16_t s_row[240]        __attribute__((aligned(32)));
+   * Staging buffer: allocate ONCE from the app heap and reuse it on every
+   * flush -- a per-flush malloc()+free() churns the heap, and on allocation
+   * failure the old code fell back to a slow row-by-row path; both could
+   * stall the UI thread and starve the audio DMA, causing choppy speech.
+   *
+   * IMPORTANT: this board is a DUAL-HEAP build (V636).  malloc() from app
+   * code lands in the PSRAM app heap (0x3c100000..0x3c900000, 8 MB), while
+   * the kernel heap used by Wi-Fi/DMA is the ~200 KB of leftover internal
+   * DRAM.  A function-scope `static` array would be placed in .bss, i.e. it
+   * would eat the SAME internal DRAM that esp_wifi_init() needs -- measured:
+   * two 9.6 KB static buffers shrank the kernel heap from 211412 to 193912
+   * bytes and wlan_sta_initialize() started failing with -12 again.
+   * So keep only the POINTERS static (4 bytes each in .bss) and let the
+   * payload live in PSRAM. */
+  static uint16_t *s_stage;   /* 240*20 RGB565 words, in PSRAM */
+  static uint16_t *s_row;     /* 240     RGB565 words, in PSRAM */
+
+  if (s_stage == NULL)
+    {
+      s_stage = (uint16_t *)malloc(240 * 20 * sizeof(uint16_t));
+      s_row   = (uint16_t *)malloc(240 * sizeof(uint16_t));
+      if (s_stage == NULL || s_row == NULL)
+        {
+          /* Out of memory: fall through to the row-by-row path below, which
+           * needs no staging buffer at all. */
+          free(s_stage); s_stage = NULL;
+          free(s_row);   s_row   = NULL;
+        }
+    }
 
   lv_color_t *src = (lv_color_t *)color_p;
-  const int   stage_bytes = (int)sizeof(s_stage);   /* 240 * 20 * 2 */
+  const int   stage_bytes = (int)(240 * 20 * 2);
 
-  if (w * h * 2 <= stage_bytes)
+  if (s_stage != NULL && w * h * 2 <= stage_bytes)
     {
       uint16_t *buf = s_stage;
 
@@ -262,7 +284,7 @@ static void my_lcd_flush(lv_display_t *disp, const lv_area_t *area,
   else
     {
       /* Unexpectedly large area (not normal PARTIAL mode): row-by-row with a
-       * static per-row buffer -- no heap allocation, so it can never fail. */
+       * per-row buffer -- no heap allocation, so it can never fail. */
       uint16_t *row = s_row;
 
       for (int y = 0; y < h; y++)
@@ -419,19 +441,39 @@ int ui_init(void)
   ets_printf("[UI] custom flush callback installed\n");
 
   /* FIX: the NuttX LVGL port allocates its display draw buffer via clib malloc
-   * from the kernel heap.  On this board PSRAM is disabled, so the heap is
-   * internal SRAM only and a full-frame (240*320*2 ~= 150 KB) buffer malloc
-   * fails -> LVGL has no canvas to render into -> the panel stays white even
-   * though the display registers and the tick advances.  Give LVGL a small
-   * partial buffer (a few rows) that comfortably fits internal RAM and switch
-   * to PARTIAL render mode; LVGL then flushes the screen band-by-band over
-   * SPI.  (A later cleanup can enable PSRAM for a full-frame buffer.) */
-  static lv_color_t g_lv_buf[240 * 20] __attribute__((aligned(32)));
-                                     /* 240 px wide x 20 rows; aligned for LVGL */
+   * from the kernel heap.  Give LVGL a small partial buffer (a few rows) and
+   * switch to PARTIAL render mode; LVGL then flushes the screen band-by-band
+   * over SPI.
+   *
+   * The buffer itself must NOT be a function-scope static array.  This is a
+   * DUAL-HEAP build (V636): app malloc() lands in the 8 MB PSRAM app heap,
+   * while the kernel heap that Wi-Fi/DMA needs is only ~200 KB of internal
+   * DRAM.  A static array is placed in .bss, i.e. it consumes exactly that
+   * scarce internal DRAM -- measured: static UI buffers shrank the kernel heap
+   * from 211412 to 193912 B and wlan_sta_initialize() began failing with -12.
+   * (The old "PSRAM is disabled on this board" note below-this was wrong: the
+   * boot log prints `[V636] app heap (malloc): 0x3c100000..0x3c900000
+   * size=8388608 (PSRAM)`.)
+   * So allocate from the app heap (PSRAM) and keep only the pointer static. */
+#define AIVOX3_LV_ROWS   20
+#define AIVOX3_LV_PIXELS (AIVOX3_LCD_WIDTH * AIVOX3_LV_ROWS)
+  static lv_color_t *g_lv_buf;      /* payload in PSRAM, not in .bss */
+  const size_t       g_lv_bytes = AIVOX3_LV_PIXELS * sizeof(lv_color_t);
+
+  if (g_lv_buf == NULL)
+    {
+      g_lv_buf = (lv_color_t *)malloc(g_lv_bytes);
+      if (g_lv_buf == NULL)
+        {
+          ets_printf("[UI] FATAL: draw buffer malloc(%u) failed\n",
+                     (unsigned)g_lv_bytes);
+          return -ENOMEM;
+        }
+    }
   ets_printf("[UI] >> set_buffers buf=%p size=%u\n",
-             (void *)g_lv_buf, (unsigned)sizeof(g_lv_buf));
+             (void *)g_lv_buf, (unsigned)g_lv_bytes);
   lv_display_set_buffers(result.disp, g_lv_buf, NULL,
-                         sizeof(g_lv_buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
+                         g_lv_bytes, LV_DISPLAY_RENDER_MODE_PARTIAL);
   ets_printf("[UI] << set_buffers returned\n");
 
   g_screen = lv_obj_create(NULL);
