@@ -282,7 +282,7 @@ if __name__=="__main__":
 SEGCHECK_PY
 cat > /tmp/patch_zero_segs.py <<'PATCH_ZERO_SEGS'
 import hashlib, struct, sys
-SCRATCH_BASE=0x3FC88000; SCRATCH_LIMIT=0x3FC90000
+SCRATCH_BASE=0x3FC88000; SCRATCH_CEIL=0x3FCB0000
 def parse(path):
     data=bytearray(open(path,"rb").read())
     if len(data)<24 or data[0]!=0xE9: raise SystemExit("bad image")
@@ -295,15 +295,24 @@ def parse(path):
     return data,entries
 def main(src,dst):
     data,entries=parse(src); scratch=SCRATCH_BASE; fixed=[]
+    # Dynamic scratch window: 0x3FC88000 up to (just below) the lowest REAL
+    # DRAM segment in this build.  fw127 proved 0x3FC88000 is valid app RAM
+    # (it carried real .data/.bss there and booted).  When the app's DRAM
+    # start drifts (dual-heap etc.), the window adapts instead of overflowing
+    # at the old fixed 32KB limit.  Never exceed SCRATCH_CEIL.
+    dram_las=[la for _,_,la,_ in entries if la!=0 and SCRATCH_BASE<=la<0x3FD00000]
+    limit=min((min(dram_las)-0x100) if dram_las else SCRATCH_CEIL, SCRATCH_CEIL)
+    print("scratch window 0x%08x..0x%08x"%(SCRATCH_BASE,limit))
     for i,off,la,ln in entries:
         if la!=0: continue
         payload=data[off+8:off+8+ln]
         if any(payload): raise SystemExit("seg%d la=0 not zeros"%i)
+        if scratch+ln>limit:
+            raise SystemExit("scratch overflow: need end 0x%x > limit 0x%x"%(scratch+ln,limit))
         struct.pack_into("<I",data,off,scratch); fixed.append((i,ln,scratch)); scratch+=ln
     if not fixed: print("no zero-laddr segments")
     else:
         for i,ln,addr in fixed: print("  seg%d 0x0->0x%08x len=0x%x"%(i,addr,ln))
-        if scratch>SCRATCH_LIMIT: raise SystemExit("scratch overflow")
     if data[23]&1:
         if len(data)<56: raise SystemExit("too small for digest")
         doff=len(data)-32; data[doff:]=hashlib.sha256(bytes(data[:doff])).digest()
@@ -332,10 +341,13 @@ fi
 echo "M-CHAIN rc=$BUILD_RC" >> build.log
 ls -la nuttx/nuttx nuttx/nuttx.bin nuttx/nuttx.merged.bin >> build.log 2>&1
 if [ -f nuttx/nuttx.bin ] && [ -f /tmp/patch_zero_segs.py ]; then
+  # HARD GATE: a la=0 segment bricks the board under SIMPLE_BOOT (ROM does not
+  # skip it).  If relocation or the audit fails, fail the job LOUDLY instead
+  # of publishing an image that would brick the device on flash.
   python3 /tmp/patch_zero_segs.py nuttx/nuttx.bin nuttx/nuttx.bin >> build.log 2>&1 \
-    || echo "== relocation reported failure rc=$? ==" >> build.log
+    || { echo "== ZERO-ADDR relocation FAILED (rc=$?) -- refusing to publish a bricking image ==" >> build.log; exit 1; }
   python3 /tmp/segcheck.py nuttx/nuttx.bin >> build.log 2>&1 \
-    || echo "== post-relocation segcheck rc=$? ==" >> build.log
+    || { echo "== ZERO-ADDR GATE FAILED post-relocation -- refusing to publish ==" >> build.log; exit 1; }
 fi
 echo "$BUILD_RC" > build_rc.txt
 
