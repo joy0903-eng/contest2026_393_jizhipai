@@ -27,6 +27,12 @@ concurrency:
 
 jobs:
   build:
+    # ── 2026-10-31 手动暂停（用户要求「停掉所有任务」）──────────────────
+    # if: false 会让 job 一进入就跳过，run 几秒内结束。
+    # 配合上面的 concurrency(cancel-in-progress)，这次 push 产生的空 run
+    # 会把当时仍在跑的那次长时间构建顶掉并取消，从而立刻停止烧额度。
+    # 恢复方法：删掉下面这行 if 即可重新构建（push 或手动 Run workflow）。
+    if: ${{ false }}
     runs-on: ubuntu-22.04
     timeout-minutes: 240
     env:
